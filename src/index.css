@@ -1,0 +1,250 @@
+@import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.light-mode {
+  --bg-primary: #f8fafc;
+  --bg-secondary: #ffffff;
+  --bg-card: #ffffff;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
+  --border: #e2e8f0;
+  --accent: #1e40af;
+  --accent-hover: #1d4ed8;
+}
+
+.dark-mode {
+  --bg-primary: #0a0a0f;
+  --bg-secondary: #111118;
+  --bg-card: #16161f;
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #475569;
+  --border: #1e2030;
+  --accent: #f97316;
+  --accent-hover: #ea580c;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.4);
+  border-radius: 99px;
+}
+
+/* Theme transition */
+.theme-transition,
+.theme-transition * {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease !important;
+}
+
+/* Neon glow for dark mode */
+.neon-glow {
+  text-shadow: 0 0 10px rgba(249, 115, 22, 0.8), 0 0 20px rgba(249, 115, 22, 0.4);
+}
+
+.neon-border {
+  box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.3), 0 0 15px rgba(249, 115, 22, 0.1);
+}
+
+/* Progress bar animation */
+@keyframes progress-glow {
+  0%, 100% { box-shadow: 0 0 8px rgba(249, 115, 22, 0.6); }
+  50% { box-shadow: 0 0 20px rgba(249, 115, 22, 1), 0 0 40px rgba(249, 115, 22, 0.4); }
+}
+
+.progress-glow {
+  animation: progress-glow 1.5s ease-in-out infinite;
+}
+
+/* Scanline effect for overlay */
+@keyframes scanline {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+.scanline::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: rgba(249, 115, 22, 0.15);
+  animation: scanline 3s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes flicker {
+  0%, 98%, 100% { opacity: 1; }
+  99% { opacity: 0.95; }
+}
+
+.terminal-flicker {
+  animation: flicker 5s infinite;
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.cursor-blink::after {
+  content: '█';
+  animation: blink 1s step-end infinite;
+  color: #f97316;
+  font-size: 0.85em;
+  margin-left: 2px;
+}
+
+/* Neon pulse for Secure button */
+@keyframes neon-pulse {
+  0%, 100% {
+    box-shadow: 0 0 8px rgba(249, 115, 22, 0.5), 0 0 16px rgba(249, 115, 22, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(249, 115, 22, 0.8), 0 0 32px rgba(249, 115, 22, 0.4);
+  }
+}
+
+.neon-pulse {
+  animation: neon-pulse 2s ease-in-out infinite;
+}
+
+@keyframes dot-blink {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+
+.dot-blink {
+  animation: dot-blink 1.2s ease-in-out infinite;
+}
+
+/* Wobble for lock icon */
+@keyframes wobble {
+  0%, 100% { transform: rotate(0deg); }
+  15% { transform: rotate(-8deg); }
+  30% { transform: rotate(7deg); }
+  45% { transform: rotate(-5deg); }
+  60% { transform: rotate(4deg); }
+  75% { transform: rotate(-2deg); }
+}
+
+.wobble {
+  animation: wobble 1.5s ease-in-out infinite;
+}
+
+/* Fade-in for banner */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out;
+}
+
+/* Squircle shape — Apple-style superellipse curvature */
+.squircle {
+  border-radius: 28%;
+}
+
+/* Glass morphism — frosted glass with 1px gradient border */
+.glass-dark {
+  background: rgba(16, 16, 22, 0.55);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid transparent;
+  background-clip: padding-box;
+  position: relative;
+}
+
+.glass-dark::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.12), rgba(255,255,255,0.02) 40%, rgba(249,115,22,0.08));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+.glass-light {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid transparent;
+  background-clip: padding-box;
+  position: relative;
+}
+
+.glass-light::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(203,213,225,0.3) 40%, rgba(148,163,184,0.15));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Metallic silver gradient background */
+.bg-metallic {
+  background:
+    radial-gradient(ellipse at 0% 0%, rgba(241,245,249,0.6) 0%, transparent 50%),
+    radial-gradient(ellipse at 100% 100%, rgba(203,213,225,0.3) 0%, transparent 50%),
+    linear-gradient(180deg, #f1f5f9 0%, #e2e8f0 40%, #eef2f6 100%);
+}
+
+/* Obsidian deep gradient */
+.bg-obsidian-deep {
+  background:
+    radial-gradient(ellipse at 0% 0%, rgba(249,115,22,0.04) 0%, transparent 40%),
+    radial-gradient(ellipse at 100% 100%, rgba(59,130,246,0.03) 0%, transparent 40%),
+    #09090b;
+}
+
+/* Logo placeholder glow */
+.logo-placeholder-glow::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.08), transparent 60%);
+  pointer-events: none;
+}
+
+/* Micro badge dot indicator */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
