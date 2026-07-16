@@ -165,24 +165,6 @@ export default function MainPage() {
         </footer>
       </main>
 
-      {/* Floating Telegram button — always visible bottom-right */}
-      {telegramVisible && (
-        <a
-          href={telegramLink}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="fixed bottom-5 right-5 z-40 flex items-center gap-2 px-4 py-3 rounded-full text-sm font-bold text-white transition-all hover:scale-105 animate-fade-in"
-          style={{
-            backgroundColor: '#229ED9',
-            boxShadow: '0 0 16px rgba(34, 158, 217, 0.5), 0 0 32px rgba(34, 158, 217, 0.2)',
-            animation: 'telegramPulse 2s ease-in-out infinite',
-          }}
-        >
-          <MessageCircle size={16} fill="white" />
-          <span className="hidden sm:inline">광고/제휴 문의</span>
-        </a>
-      )}
-
       {overlay && (
         <AIBridgeOverlay
           targetUrl={overlay.url}

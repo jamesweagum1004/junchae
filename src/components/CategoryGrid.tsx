@@ -110,43 +110,46 @@ function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean
   const badgeClass = badgeColorMap[ad.badge] || 'bg-neon-orange text-white';
   return (
     <div
-      className={`col-span-full sm:col-span-2 md:col-span-2 lg:col-span-3 xl:col-span-4 rounded-2xl border p-4 transition-all duration-200 group cursor-pointer ${
+      className={`col-span-1 rounded-2xl border p-4 flex flex-col justify-between transition-all duration-200 group cursor-pointer hover:scale-[1.01] active:scale-[0.99] relative overflow-hidden ${
         isSecure
-          ? 'glass-dark border-neon-orange/15 hover:border-neon-orange/30'
-          : 'glass-light border-slate-300/40 hover:border-neon-orange/30'
+          ? 'glass-dark border-neon-orange/30 hover:border-neon-orange/50'
+          : 'bg-zinc-900/90 border-orange-500/30 hover:border-orange-500/50'
       }`}
       onClick={() => onClick(ad.redirectUrl, ad.title)}
     >
-      <div className="flex items-center gap-4">
-        {/* Image / placeholder */}
-        <div className={`squircle w-14 h-14 flex-shrink-0 flex items-center justify-center overflow-hidden ${
-          isSecure ? 'bg-obsidian-700 border border-white/[0.06]' : 'bg-slate-200 border border-slate-300/50'
-        }`}>
-          {ad.imageUrl ? (
-            <img src={ad.imageUrl} alt={ad.title} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-          ) : (
-            <Zap size={20} className={isSecure ? 'text-neon-orange/60' : 'text-slate-500'} />
-          )}
-        </div>
-
-        {/* Text content */}
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${badgeClass}`}>
-              {ad.badge}
-            </span>
-            <h4 className={`text-sm font-bold tracking-tight truncate ${isSecure ? 'text-white' : 'text-slate-900'}`}>
-              {ad.title}
-            </h4>
-          </div>
-          <p className={`text-xs truncate ${isSecure ? 'text-slate-400' : 'text-slate-600'}`}>
-            {ad.description}
-          </p>
-        </div>
-
-        {/* CTA arrow */}
-        <ExternalLink size={16} className={`flex-shrink-0 transition-colors ${isSecure ? 'text-slate-600 group-hover:text-neon-orange' : 'text-slate-400 group-hover:text-neon-orange'}`} />
+      {/* Top row: badge + external link icon */}
+      <div className="flex items-start justify-between">
+        <span className={`text-[10px] font-black px-2 py-0.5 rounded border ${badgeClass} border-white/10`}>
+          {ad.badge}
+        </span>
+        <ExternalLink size={16} className={`flex-shrink-0 transition-colors ${isSecure ? 'text-slate-600 group-hover:text-neon-orange' : 'text-zinc-500 group-hover:text-zinc-300'}`} />
       </div>
+
+      {/* Middle: image + title + description */}
+      <div className="mt-3 flex-1">
+        {ad.imageUrl && (
+          <div className="mb-2 squircle w-10 h-10 flex items-center justify-center overflow-hidden bg-obsidian-700 border border-white/[0.06]">
+            <img src={ad.imageUrl} alt={ad.title} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+          </div>
+        )}
+        <h4 className={`text-sm font-bold tracking-tight leading-tight ${isSecure ? 'text-white' : 'text-zinc-100'}`}>
+          {ad.title}
+        </h4>
+        <p className={`text-xs mt-1 line-clamp-2 ${isSecure ? 'text-slate-400' : 'text-zinc-400'}`}>
+          {ad.description}
+        </p>
+      </div>
+
+      {/* Bottom: CTA button */}
+      <a
+        href={ad.redirectUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="mt-3 block w-full text-center py-2 bg-neon-orange/10 hover:bg-neon-orange/20 text-neon-orange text-xs font-semibold rounded-lg transition-colors"
+      >
+        바로가기
+      </a>
     </div>
   );
 }
