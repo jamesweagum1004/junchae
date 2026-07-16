@@ -1,40 +1,86 @@
-﻿import { useState } from 'react';
-import { Plus, Trash2, ExternalLink, Upload, Download, Link2, X, CheckCircle, Edit3, Check } from 'lucide-react';
+import { useRef, useState } from 'react';
+import {
+  Check,
+  CheckCircle,
+  Download,
+  Edit3,
+  ExternalLink,
+  Link2,
+  Plus,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { Site, SiteStatus } from '../../data/categories';
 import ModeSubTabs from '../ModeSubTabs';
 
 const statusOptions: { value: SiteStatus; label: string }[] = [
-  { value: 'normal', label: 'Normal' },
-  { value: 'busy', label: 'Busy' },
-  { value: 'slow', label: 'Slow' },
+  { value: 'normal', label: '정상' },
+  { value: 'busy', label: '혼잡' },
+  { value: 'slow', label: '지연' },
 ];
+
+const nextStatus = (status: SiteStatus): SiteStatus =>
+  status === 'normal' ? 'busy' : status === 'busy' ? 'slow' : 'normal';
+
+type LogoUploadResult = {
+  ok: true;
+  data: { url: string };
+};
 
 export default function SiteManager() {
   const {
-    getModeData, addSiteInMode, removeSiteInMode,
-    updateSiteStatusInMode, updateSiteLogoInMode, updateSiteUrlInMode, updateSiteNameInMode,
+    getModeData,
+    addSiteInMode,
+    removeSiteInMode,
+    updateSiteStatusInMode,
+    updateSiteLogoInMode,
+    updateSiteUrlInMode,
+    updateSiteNameInMode,
   } = useData();
+
   const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('standard');
   const { categories } = getModeData(activeMode);
-
   const allSites: (Site & { categoryId: string; categoryName: string })[] = categories.flatMap((c) =>
     (Array.isArray(c.sites) ? c.sites : []).map((s) => ({ ...s, categoryId: c.id, categoryName: c.name }))
   );
 
-  const [form, setForm] = useState({ name: '', url: '', categoryId: '', description: '', logo: '/uploads/logos/default.png' });
+  const [form, setForm] = useState({
+    name: '',
+    url: '',
+    categoryId: '',
+    description: '',
+    logo: '/uploads/logos/default.png',
+  });
   const [logoModal, setLogoModal] = useState<number | null>(null);
   const [logoUrl, setLogoUrl] = useState('');
-  const [logoDownloading, setLogoDownloading] = useState(false);
+  const [logoUploading, setLogoUploading] = useState(false);
   const [logoDownloaded, setLogoDownloaded] = useState(false);
   const [editingUrlId, setEditingUrlId] = useState<number | null>(null);
   const [editingUrlValue, setEditingUrlValue] = useState('');
   const [editingNameId, setEditingNameId] = useState<number | null>(null);
   const [editingNameValue, setEditingNameValue] = useState('');
+  const modalFileInputRef = useRef<HTMLInputElement>(null);
+  const newSiteFileInputRef = useRef<HTMLInputElement>(null);
 
   const showError = (message: string, err: unknown) => {
     console.error(message, err);
     alert(message);
+  };
+
+  const parseUploadResponse = async (res: Response) => {
+    const body = await res.json().catch(() => null);
+
+    if (!res.ok || !body?.ok || typeof body.data?.url !== 'string') {
+      console.error('로고 업로드 응답 오류', {
+        status: res.status,
+        body,
+      });
+      throw new Error(body?.message || body?.error || '로고 업로드에 실패했습니다.');
+    }
+
+    return (body as LogoUploadResult).data.url;
   };
 
   const uploadLogoFile = async (file: File) => {
@@ -45,13 +91,8 @@ export default function SiteManager() {
       method: 'POST',
       body,
     });
-    const payload = await res.json().catch(() => null);
 
-    if (!res.ok || !payload?.ok || typeof payload.data?.url !== 'string') {
-      throw new Error(payload?.message || payload?.error || 'Logo upload failed.');
-    }
-
-    return payload.data.url as string;
+    return parseUploadResponse(res);
   };
 
   const downloadLogoFromUrl = async (url: string) => {
@@ -60,41 +101,58 @@ export default function SiteManager() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
     });
-    const payload = await res.json().catch(() => null);
 
-    if (!res.ok || !payload?.ok || typeof payload.data?.url !== 'string') {
-      throw new Error(payload?.message || payload?.error || 'Logo download failed.');
+    return parseUploadResponse(res);
+  };
+
+  const closeLogoModalSoon = () => {
+    setLogoDownloaded(true);
+    setTimeout(() => {
+      setLogoDownloaded(false);
+      setLogoModal(null);
+      setLogoUrl('');
+    }, 1200);
+  };
+
+  const saveUploadedLogo = async (siteId: number, file: File) => {
+    setLogoUploading(true);
+    try {
+      const logoPath = await uploadLogoFile(file);
+      await updateSiteLogoInMode(activeMode, siteId, logoPath);
+      closeLogoModalSoon();
+    } catch (err) {
+      showError('로고 업로드에 실패했습니다.', err);
+    } finally {
+      setLogoUploading(false);
     }
-
-    return payload.data.url as string;
   };
 
   const chooseLogoForNewSite = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'image/jpeg,image/png,image/webp,image/x-icon,.ico';
-    input.onchange = async (event) => {
-      const file = (event.target as HTMLInputElement).files?.[0];
-      if (!file) return;
+    newSiteFileInputRef.current?.click();
+  };
 
-      try {
-        const logoPath = await uploadLogoFile(file);
-        setForm((current) => ({ ...current, logo: logoPath }));
-      } catch (err) {
-        showError('Failed to upload logo file.', err);
-      }
-    };
-    input.click();
+  const handleNewSiteLogoFile = async (file: File | undefined) => {
+    if (!file) return;
+    setLogoUploading(true);
+    try {
+      const logoPath = await uploadLogoFile(file);
+      setForm((current) => ({ ...current, logo: logoPath }));
+    } catch (err) {
+      showError('로고 업로드에 실패했습니다.', err);
+    } finally {
+      setLogoUploading(false);
+      if (newSiteFileInputRef.current) newSiteFileInputRef.current.value = '';
+    }
   };
 
   const toggleStatus = async (id: number) => {
     const site = allSites.find((s) => s.id === id);
     if (!site) return;
-    const next: SiteStatus = site.status === 'normal' ? 'busy' : site.status === 'busy' ? 'slow' : 'normal';
+
     try {
-      await updateSiteStatusInMode(activeMode, id, next);
+      await updateSiteStatusInMode(activeMode, id, nextStatus(site.status));
     } catch (err) {
-      showError('Failed to update site status.', err);
+      showError('상태 변경에 실패했습니다.', err);
     }
   };
 
@@ -102,12 +160,13 @@ export default function SiteManager() {
     try {
       await removeSiteInMode(activeMode, id);
     } catch (err) {
-      showError('Failed to delete site.', err);
+      showError('사이트 삭제에 실패했습니다.', err);
     }
   };
 
   const add = async () => {
     if (!form.name.trim() || !form.url.trim() || !form.categoryId) return;
+
     try {
       await addSiteInMode(activeMode, form.categoryId, {
         name: form.name,
@@ -118,39 +177,29 @@ export default function SiteManager() {
       });
       setForm({ name: '', url: '', categoryId: '', description: '', logo: '/uploads/logos/default.png' });
     } catch (err) {
-      showError('Failed to add site.', err);
+      showError('사이트 추가에 실패했습니다.', err);
     }
   };
 
   const downloadLogo = async () => {
     if (!logoUrl.trim() || logoModal === null) return;
-    setLogoDownloading(true);
+
+    setLogoUploading(true);
     try {
       const logoPath = await downloadLogoFromUrl(logoUrl.trim());
       await updateSiteLogoInMode(activeMode, logoModal, logoPath);
-      setLogoDownloading(false);
-      setLogoDownloaded(true);
-      setTimeout(() => {
-        setLogoDownloaded(false);
-        setLogoModal(null);
-        setLogoUrl('');
-      }, 1500);
+      closeLogoModalSoon();
     } catch (err) {
-      setLogoDownloading(false);
-      showError('Failed to save logo path.', err);
+      showError('로고 업로드에 실패했습니다.', err);
+    } finally {
+      setLogoUploading(false);
     }
   };
 
   const onFileDrop = async (e: React.DragEvent, siteId: number) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (!file) return;
-    try {
-      const logoPath = await uploadLogoFile(file);
-      await updateSiteLogoInMode(activeMode, siteId, logoPath);
-    } catch (err) {
-      showError('Failed to upload logo file.', err);
-    }
+    await saveUploadedLogo(siteId, file);
   };
 
   const startEditUrl = (id: number, url: string) => {
@@ -163,7 +212,7 @@ export default function SiteManager() {
       try {
         await updateSiteUrlInMode(activeMode, editingUrlId, editingUrlValue);
       } catch (err) {
-        showError('Failed to update site URL.', err);
+        showError('URL 수정에 실패했습니다.', err);
         return;
       }
     }
@@ -181,7 +230,7 @@ export default function SiteManager() {
       try {
         await updateSiteNameInMode(activeMode, editingNameId, editingNameValue);
       } catch (err) {
-        showError('Failed to update site name.', err);
+        showError('사이트명 수정에 실패했습니다.', err);
         return;
       }
     }
@@ -189,22 +238,23 @@ export default function SiteManager() {
     setEditingNameValue('');
   };
 
+  const activeLogoSite = allSites.find((site) => site.id === logoModal);
+
   return (
     <div className="space-y-5">
       <ModeSubTabs activeMode={activeMode} onModeChange={setActiveMode} />
 
-      {/* Add form */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-4 bg-obsidian-600 rounded-xl border border-obsidian-500">
         <input
           value={form.name}
           onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          placeholder="?ъ씠?몃챸"
+          placeholder="사이트명"
           className="px-3 py-2 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange"
         />
         <input
           value={form.url}
           onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
-          placeholder="?대룞??URL"
+          placeholder="이동 URL"
           className="px-3 py-2 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange"
         />
         <select
@@ -212,15 +262,17 @@ export default function SiteManager() {
           onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value }))}
           className="px-3 py-2 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
         >
-          <option value="">移댄뀒怨좊━ ?좏깮</option>
+          <option value="">카테고리 선택</option>
           {categories.map((c) => (
-            <option key={c.id} value={c.id}>{c.name}</option>
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
           ))}
         </select>
         <input
           value={form.description}
           onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-          placeholder="?ㅻ챸"
+          placeholder="설명"
           className="px-3 py-2 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange"
         />
         <div className="col-span-2 sm:col-span-4 flex gap-2">
@@ -230,10 +282,18 @@ export default function SiteManager() {
             placeholder="/uploads/logos/logo.png"
             className="flex-1 px-3 py-2 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange font-mono"
           />
+          <input
+            ref={newSiteFileInputRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/x-icon,.ico"
+            className="hidden"
+            onChange={(e) => handleNewSiteLogoFile(e.target.files?.[0])}
+          />
           <button
             type="button"
             onClick={chooseLogoForNewSite}
-            className="px-3 py-2 bg-obsidian-700 border border-obsidian-500 text-slate-300 text-sm font-semibold rounded-lg hover:border-neon-orange/50 flex items-center gap-1.5 transition-colors"
+            disabled={logoUploading}
+            className="px-3 py-2 bg-obsidian-700 border border-obsidian-500 text-slate-300 text-sm font-semibold rounded-lg hover:border-neon-orange/50 flex items-center gap-1.5 transition-colors disabled:opacity-50"
           >
             <Upload size={14} /> Logo
           </button>
@@ -242,16 +302,15 @@ export default function SiteManager() {
           onClick={add}
           className="col-span-2 sm:col-span-4 py-2 bg-neon-orange text-white text-sm font-semibold rounded-lg hover:bg-neon-orangeDark flex items-center justify-center gap-1.5 transition-colors"
         >
-          <Plus size={14} /> ?ъ씠??異붽?
+          <Plus size={14} /> 사이트 추가
         </button>
       </div>
 
-      {/* Table */}
       <div className="overflow-x-auto rounded-xl border border-obsidian-500">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-obsidian-500 bg-obsidian-600">
-              {['濡쒓퀬', '?ъ씠?몃챸', '移댄뀒怨좊━', '?대룞??URL', '?곹깭', '濡쒓퀬', ''].map((h) => (
+              {['로고', '사이트명', '카테고리', '이동 URL', '상태', '로고', ''].map((h) => (
                 <th key={h} className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
                   {h}
                 </th>
@@ -263,11 +322,22 @@ export default function SiteManager() {
               <tr key={site.id} className="border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors">
                 <td className="px-3 py-2.5">
                   <div className="w-6 h-6 rounded bg-obsidian-700 border border-obsidian-500 flex items-center justify-center overflow-hidden">
-                    <img src={site.logo} alt="" className="w-4 h-4 object-contain" onError={(e) => {
-                      const img = e.target as HTMLImageElement;
-                      img.style.display = 'none';
-                      if (img.parentElement) img.parentElement.innerHTML = `<span class="text-[9px] font-bold text-neon-orange">${site.name[0]}</span>`;
-                    }} />
+                    {site.logo ? (
+                      <img
+                        src={site.logo}
+                        alt=""
+                        className="w-4 h-4 object-contain"
+                        onError={(e) => {
+                          const img = e.target as HTMLImageElement;
+                          img.style.display = 'none';
+                          if (img.parentElement) {
+                            img.parentElement.innerHTML = `<span class="text-[9px] font-bold text-neon-orange">${site.name[0] || '?'}</span>`;
+                          }
+                        }}
+                      />
+                    ) : (
+                      <span className="text-[9px] font-bold text-neon-orange">{site.name[0] || '?'}</span>
+                    )}
                   </div>
                 </td>
                 <td className="px-3 py-2.5">
@@ -335,9 +405,11 @@ export default function SiteManager() {
                   <button
                     onClick={() => toggleStatus(site.id)}
                     className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${
-                      site.status === 'normal' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' :
-                      site.status === 'busy' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
-                      'bg-red-500/10 text-red-400 border-red-500/30'
+                      site.status === 'normal'
+                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                        : site.status === 'busy'
+                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                          : 'bg-red-500/10 text-red-400 border-red-500/30'
                     }`}
                   >
                     {statusOptions.find((s) => s.value === site.status)?.label}
@@ -345,10 +417,15 @@ export default function SiteManager() {
                 </td>
                 <td className="px-3 py-2.5">
                   <button
-                    onClick={() => { setLogoModal(site.id); setLogoUrl(''); setLogoDownloaded(false); }}
+                    onClick={() => {
+                      setLogoModal(site.id);
+                      setLogoUrl('');
+                      setLogoDownloaded(false);
+                    }}
                     className="text-xs text-neon-orange/70 hover:text-neon-orange font-medium transition-colors whitespace-nowrap"
                   >
-                    蹂寃?                  </button>
+                    변경
+                  </button>
                 </td>
                 <td className="px-3 py-2.5">
                   <button onClick={() => remove(site.id)} className="text-slate-600 hover:text-red-400 transition-colors">
@@ -361,59 +438,59 @@ export default function SiteManager() {
         </table>
       </div>
 
-      {/* Logo Modal */}
       {logoModal !== null && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setLogoModal(null)}>
           <div className="w-full max-w-md mx-4 bg-obsidian-700 border border-obsidian-500 rounded-2xl p-6 space-y-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-white">Change Logo</h3>
+              <div className="flex items-center gap-3">
+                <h3 className="text-sm font-bold text-white">로고 이미지 변경</h3>
+                {activeLogoSite?.logo && (
+                  <img src={activeLogoSite.logo} alt="" className="w-7 h-7 object-contain rounded bg-obsidian-800 border border-obsidian-500" />
+                )}
+              </div>
               <button onClick={() => setLogoModal(null)} className="text-slate-500 hover:text-slate-300">
                 <X size={16} />
               </button>
             </div>
 
-            {/* Option 1: File upload */}
             <div>
               <p className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">
-                <Upload size={11} className="inline mr-1.5 text-neon-orange" />?듭뀡 1 ???뚯씪 ?낅줈??              </p>
+                <Upload size={11} className="inline mr-1.5 text-neon-orange" />
+                옵션 1 — 파일 업로드
+              </p>
+              <input
+                ref={modalFileInputRef}
+                type="file"
+                accept="image/jpeg,image/png,image/webp,image/x-icon,.ico"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (logoModal !== null && file) void saveUploadedLogo(logoModal, file);
+                  e.target.value = '';
+                }}
+              />
               <div
                 onDragOver={(e) => e.preventDefault()}
                 onDrop={(e) => onFileDrop(e, logoModal)}
-                onClick={() => {
-                  const input = document.createElement('input');
-                  input.type = 'file';
-                  input.accept = 'image/jpeg,image/png,image/webp,image/x-icon,.ico';
-                  input.onchange = async (e) => {
-                    const file = (e.target as HTMLInputElement).files?.[0];
-                    if (!file) return;
-                    try {
-                      const logoPath = await uploadLogoFile(file);
-                      await updateSiteLogoInMode(activeMode, logoModal, logoPath);
-                    } catch (err) {
-                      showError('Failed to upload logo file.', err);
-                    }
-                  };
-                  input.click();
-                }}
+                onClick={() => modalFileInputRef.current?.click()}
                 className="border-2 border-dashed border-obsidian-500 hover:border-neon-orange/50 rounded-xl p-6 text-center cursor-pointer transition-all"
               >
                 <Upload size={20} className="mx-auto mb-2 text-slate-500" />
-                <p className="text-xs text-slate-400">Drop or click to upload a logo file</p>
-                <p className="text-[10px] text-slate-600 mt-1">/uploads/logos/ ?대뜑????λ맗?덈떎</p>
+                <p className="text-xs text-slate-400">{logoUploading ? '업로드 중...' : '파일을 드래그하거나 클릭하여 업로드'}</p>
+                <p className="text-[10px] text-slate-600 mt-1">/uploads/logos/ 폴더에 저장됩니다</p>
               </div>
             </div>
 
-            {/* Divider */}
             <div className="flex items-center gap-3">
               <div className="flex-1 h-px bg-obsidian-500" />
               <span className="text-[10px] text-slate-600 font-mono">OR</span>
               <div className="flex-1 h-px bg-obsidian-500" />
             </div>
 
-            {/* Option 2: URL download */}
             <div>
               <p className="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">
-                <Link2 size={11} className="inline mr-1.5 text-neon-orange" />?듭뀡 2 ???몃? URL?먯꽌 ?ㅼ슫濡쒕뱶
+                <Link2 size={11} className="inline mr-1.5 text-neon-orange" />
+                옵션 2 — 외부 URL에서 다운로드
               </p>
               <div className="flex gap-2">
                 <input
@@ -424,24 +501,27 @@ export default function SiteManager() {
                 />
                 <button
                   onClick={downloadLogo}
-                  disabled={logoDownloading || !logoUrl.trim()}
+                  disabled={logoUploading || !logoUrl.trim()}
                   className="px-3 py-2 bg-neon-orange text-white text-xs font-semibold rounded-lg hover:bg-neon-orangeDark flex items-center gap-1.5 transition-colors disabled:opacity-50"
                 >
-                  {logoDownloading ? <span className="animate-spin inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full" /> : logoDownloaded ? <CheckCircle size={12} /> : <Download size={12} />}
-                  {logoDownloading ? '?ㅼ슫濡쒕뱶 以?..' : logoDownloaded ? '?꾨즺' : '?쒕쾭濡??ㅼ슫濡쒕뱶'}
+                  {logoUploading ? (
+                    <span className="animate-spin inline-block w-3 h-3 border-2 border-white/30 border-t-white rounded-full" />
+                  ) : logoDownloaded ? (
+                    <CheckCircle size={12} />
+                  ) : (
+                    <Download size={12} />
+                  )}
+                  {logoUploading ? '업로드 중...' : logoDownloaded ? '완료' : '서버로 다운로드'}
                 </button>
               </div>
-              {logoDownloading && (
-                <p className="text-[10px] text-neon-orange/60 font-mono mt-2 animate-fade-in">
-                  {'> '}諛깆뿏?쒖뿉???대?吏瑜?湲곸뼱? /uploads/logos/ ?????以?..
-                </p>
-              )}
-              {logoDownloaded && (
-                <p className="text-[10px] text-emerald-400 font-mono mt-2 animate-fade-in">
-                  {'> '}濡쒓퀬 ?ㅼ슫濡쒕뱶 ?꾨즺 ??寃쎈줈媛 ?먮룞 蹂?섎릺?덉뒿?덈떎.
-                </p>
-              )}
             </div>
+
+            {logoDownloaded && (
+              <div className="flex items-center gap-2 text-xs text-emerald-400 font-mono">
+                <CheckCircle size={12} />
+                로고가 업로드되었습니다.
+              </div>
+            )}
           </div>
         </div>
       )}
