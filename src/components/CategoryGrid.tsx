@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useTheme } from '../context/ThemeContext';
 import { useData } from '../context/DataContext';
 import { ArrowLeft } from 'lucide-react';
@@ -10,17 +10,50 @@ interface CategoryGridProps {
 export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
   const { isSecure } = useTheme();
   
-  // 데이터 안전 바인딩
-  const { categories, standardCategories, secureCategories } = useData();
-  const baseCategories = categories || standardCategories || [];
-  const activeCategories = isSecure ? (secureCategories || []) : baseCategories;
+  // Context 데이터 가져오기
+  const { categories: ctxCategories, standardCategories: ctxStandard, secureCategories: ctxSecure } = useData();
 
-  // 더보기 전용 로컬 상태
+  // 1. [실시간 싱크] 로컬스토리지 및 컨텍스트 통합 상태 관리
+  const [activeCategories, setActiveCategories] = useState<any[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
 
-  // [치트키] 데이터가 sites, items, links 중 무엇으로 되어 있든 자동으로 찾아내는 함수
+  useEffect(() => {
+    // 관리자 페이지에서 저장하는 로컬스토리지 키를 실시간으로 긁어옵니다.
+    const savedStandard = localStorage.getItem('standardCategories') || localStorage.getItem('categories');
+    const savedSecure = localStorage.getItem('secureCategories');
+
+    let standard = ctxStandard || ctxCategories || [];
+    let secure = ctxSecure || [];
+
+    // 로컬스토리지에 저장된 진짜 데이터가 있다면 최우선 적용합니다.
+    if (savedStandard) {
+      try { standard = JSON.parse(savedStandard); } catch (e) {}
+    }
+    if (savedSecure) {
+      try { secure = JSON.parse(savedSecure); } catch (e) {}
+    }
+
+    setActiveCategories(isSecure ? secure : standard);
+  }, [isSecure, ctxCategories, ctxStandard, ctxSecure]);
+
+  // 데이터 구조 통합 (sites, items, links 자동 감지)
   const getSitesList = (category: any) => {
     return category.sites || category.items || category.links || [];
+  };
+
+  // [상태값 번역 및 색상 매핑 헬퍼] normal -> 정상(초록), busy -> 혼잡(주황), slow -> 지연(빨강)
+  const getStatusStyle = (status: string) => {
+    const s = (status || '').toLowerCase();
+    if (s === 'normal' || s === '정상') {
+      return { label: '정상', className: 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' };
+    }
+    if (s === 'busy' || s === '혼잡') {
+      return { label: '혼잡', className: 'bg-amber-500/10 text-amber-500 border border-amber-500/20' };
+    }
+    if (s === 'slow' || s === '지연') {
+      return { label: '지연', className: 'bg-rose-500/10 text-rose-500 border border-rose-500/20' };
+    }
+    return { label: status, className: 'bg-zinc-500/10 text-zinc-500 border border-zinc-500/20' };
   };
 
   // ----------------------------------------------------
@@ -72,6 +105,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                 const siteName = item.name || item.title || "이름 없음";
                 const siteUrl = item.url || item.redirectUrl || "";
                 const firstLetter = siteName.charAt(0) || "?";
+                const statusInfo = getStatusStyle(item.status);
 
                 return (
                   <button
@@ -97,14 +131,8 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                         <span className="text-[10px] text-slate-400 mt-0.5 block truncate max-w-[150px]">{siteUrl}</span>
                       </div>
                     </div>
-                    <span className={`flex-shrink-0 text-[10px] font-bold px-2.5 py-1 rounded-full ${
-                      item.status === '정상' 
-                        ? 'bg-emerald-500/10 text-emerald-500' 
-                        : item.status === '혼잡' 
-                          ? 'bg-amber-500/10 text-amber-500' 
-                          : 'bg-rose-500/10 text-rose-500'
-                    }`}>
-                      {item.status || '정상'}
+                    <span className={`flex-shrink-0 text-[10px] font-bold px-2.5 py-1 rounded-full ${statusInfo.className}`}>
+                      {statusInfo.label}
                     </span>
                   </button>
                 );
@@ -154,6 +182,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                   const siteName = item.name || item.title || "이름 없음";
                   const siteUrl = item.url || item.redirectUrl || "";
                   const firstLetter = siteName.charAt(0) || "?";
+                  const statusInfo = getStatusStyle(item.status);
 
                   return (
                     <button
@@ -176,14 +205,8 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                         </div>
                         <span className="text-xs font-bold truncate">{siteName}</span>
                       </div>
-                      <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${
-                        item.status === '정상' 
-                          ? 'bg-emerald-500/10 text-emerald-500' 
-                          : item.status === '혼잡' 
-                            ? 'bg-amber-500/10 text-amber-500' 
-                            : 'bg-rose-500/10 text-rose-500'
-                      }`}>
-                        {item.status || '정상'}
+                      <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full flex-shrink-0 ${statusInfo.className}`}>
+                        {statusInfo.label}
                       </span>
                     </button>
                   );
