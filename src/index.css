@@ -159,6 +159,11 @@ body {
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes telegramPulse {
+  0%, 100% { box-shadow: 0 0 16px rgba(34, 158, 217, 0.5), 0 0 32px rgba(34, 158, 217, 0.2); }
+  50% { box-shadow: 0 0 24px rgba(34, 158, 217, 0.7), 0 0 48px rgba(34, 158, 217, 0.3); }
+}
+
 .animate-fade-in {
   animation: fade-in 0.3s ease-out;
 }

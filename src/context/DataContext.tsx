@@ -65,6 +65,11 @@ interface DataContextType {
   /** Mobile banner column setting */
   mobileColumns: MobileColumns;
   setMobileColumns: (c: MobileColumns) => void;
+  /** Telegram inquiry button settings */
+  telegramLink: string;
+  telegramVisible: boolean;
+  setTelegramLink: (link: string) => void;
+  setTelegramVisible: (visible: boolean) => void;
 }
 
 const DataContext = createContext<DataContextType | null>(null);
@@ -79,6 +84,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [stdInterAds, setStdInterAds] = useState<InterAd[]>(standardInterAds);
   const [secInterAds, setSecInterAds] = useState<InterAd[]>(secureInterAds);
   const [mobileColumns, setMobileColumns] = useState<MobileColumns>(1);
+  const [telegramLink, setTelegramLinkState] = useState('https://t.me/junchae_admin');
+  const [telegramVisible, setTelegramVisibleState] = useState(true);
 
   const isStandard = mode === 'standard';
   const categories = isStandard ? stdCats : secCats;
@@ -88,6 +95,28 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const catsSetter = (m: 'standard' | 'secure') => (m === 'standard' ? setStdCats : setSecCats);
   const adsSetter = (m: 'standard' | 'secure') => (m === 'standard' ? setStdAds : setSecAds);
   const interAdsSetter = (m: 'standard' | 'secure') => (m === 'standard' ? setStdInterAds : setSecInterAds);
+
+  // Load Telegram settings from localStorage on mount
+  useState(() => {
+    try {
+      const savedLink = localStorage.getItem('telegram_link');
+      const savedVisible = localStorage.getItem('telegram_visible');
+      if (savedLink) setTelegramLinkState(savedLink);
+      if (savedVisible !== null) setTelegramVisibleState(savedVisible === 'true');
+    } catch {
+      // localStorage unavailable
+    }
+    return null;
+  });
+
+  const setTelegramLink = useCallback((link: string) => {
+    setTelegramLinkState(link);
+    try { localStorage.setItem('telegram_link', link); } catch {}
+  }, []);
+  const setTelegramVisible = useCallback((visible: boolean) => {
+    setTelegramVisibleState(visible);
+    try { localStorage.setItem('telegram_visible', String(visible)); } catch {}
+  }, []);
 
   const updateSiteLogoInMode = useCallback((m: 'standard' | 'secure', siteId: number, logoPath: string) => {
     catsSetter(m)((prev: Category[]) =>
@@ -223,6 +252,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         getModeData,
         interAds, addInterAdInMode, updateInterAdInMode, removeInterAdInMode,
         mobileColumns, setMobileColumns,
+        telegramLink, telegramVisible, setTelegramLink, setTelegramVisible,
       }}
     >
       {children}

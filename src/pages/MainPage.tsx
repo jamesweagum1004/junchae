@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Globe, ChevronRight, AlertTriangle, ShieldCheck, Lock } from 'lucide-react';
+import { Globe, ChevronRight, AlertTriangle, ShieldCheck, Lock, MessageCircle } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useData } from '../context/DataContext';
 import Header from '../components/Header';
@@ -10,7 +10,7 @@ import AIBridgeOverlay from '../components/AIBridgeOverlay';
 
 export default function MainPage() {
   const { isSecure, setMode } = useTheme();
-  const { secureCategories } = useData();
+  const { secureCategories, telegramLink, telegramVisible } = useData();
 
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
 
@@ -77,12 +77,12 @@ export default function MainPage() {
         </section>
 
         {/* Premium Ads */}
-        <section>
+        <section className="clear-both">
           <AdsGrid onAdClick={handleSiteClick} />
         </section>
 
-        {/* Category Grid */}
-        <section>
+        {/* Category Grid — fully decoupled independent grid */}
+        <section className="clear-both mt-8">
           <div className="flex items-center gap-2 mb-4">
             <Globe size={14} className={isSecure ? 'text-neon-orange' : 'text-blue-600'} />
             <span className={`text-xs font-semibold uppercase tracking-widest ${isSecure ? 'text-neon-orange/70' : 'text-slate-400'}`}>
@@ -140,15 +140,48 @@ export default function MainPage() {
         )}
 
         {/* Footer */}
-        <footer className={`text-center py-8 border-t text-xs space-y-1 ${isSecure ? 'border-obsidian-600 text-slate-700' : 'border-slate-200 text-slate-400'}`}>
+        <footer className={`clear-both text-center py-8 border-t text-xs space-y-3 ${isSecure ? 'border-obsidian-600 text-slate-700' : 'border-slate-200 text-slate-400'}`}>
           <p className="font-mono">
             {isSecure
               ? '© 2025 전체닷컴 — SECURE BRIDGE ENGINE v2.1'
               : '© 2025 전체닷컴 — 대한민국 No.1 링크 디렉토리'}
           </p>
           <p>모든 링크는 정보 제공 목적으로만 수록되었습니다.</p>
+          {telegramVisible && (
+            <a
+              href={telegramLink}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-full text-xs font-bold text-white transition-all hover:scale-105"
+              style={{
+                backgroundColor: '#229ED9',
+                boxShadow: '0 0 12px rgba(34, 158, 217, 0.4)',
+              }}
+            >
+              <MessageCircle size={13} fill="white" />
+              광고/제휴 문의 (Telegram)
+            </a>
+          )}
         </footer>
       </main>
+
+      {/* Floating Telegram button — always visible bottom-right */}
+      {telegramVisible && (
+        <a
+          href={telegramLink}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="fixed bottom-5 right-5 z-40 flex items-center gap-2 px-4 py-3 rounded-full text-sm font-bold text-white transition-all hover:scale-105 animate-fade-in"
+          style={{
+            backgroundColor: '#229ED9',
+            boxShadow: '0 0 16px rgba(34, 158, 217, 0.5), 0 0 32px rgba(34, 158, 217, 0.2)',
+            animation: 'telegramPulse 2s ease-in-out infinite',
+          }}
+        >
+          <MessageCircle size={16} fill="white" />
+          <span className="hidden sm:inline">광고/제휴 문의</span>
+        </a>
+      )}
 
       {overlay && (
         <AIBridgeOverlay

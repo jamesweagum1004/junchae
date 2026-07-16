@@ -110,7 +110,7 @@ function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean
   const badgeClass = badgeColorMap[ad.badge] || 'bg-neon-orange text-white';
   return (
     <div
-      className={`sm:col-span-2 lg:col-span-3 xl:col-span-4 rounded-2xl border p-4 transition-all duration-200 group cursor-pointer ${
+      className={`col-span-full sm:col-span-2 md:col-span-2 lg:col-span-3 xl:col-span-4 rounded-2xl border p-4 transition-all duration-200 group cursor-pointer ${
         isSecure
           ? 'glass-dark border-neon-orange/15 hover:border-neon-orange/30'
           : 'glass-light border-slate-300/40 hover:border-neon-orange/30'
@@ -166,7 +166,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
     });
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6 w-full mt-8">
       {categories.map((category, index) => {
         const IconComponent = iconMap[category.icon] || ChevronRight;
         const colors = colorMap[category.color] || colorMap.blue;
