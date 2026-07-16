@@ -17,31 +17,66 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
   const [activeCategories, setActiveCategories] = useState<any[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
 
-  useEffect(() => {
-    // 관리자 페이지에서 저장하는 로컬스토리지 키를 실시간으로 긁어옵니다.
-    const savedStandard = localStorage.getItem('standardCategories') || localStorage.getItem('categories');
-    const savedSecure = localStorage.getItem('secureCategories');
-
-    let standard = ctxStandard || ctxCategories || [];
-    let secure = ctxSecure || [];
-
-    // 로컬스토리지에 저장된 진짜 데이터가 있다면 최우선 적용합니다.
-    if (savedStandard) {
-      try { standard = JSON.parse(savedStandard); } catch (e) {}
-    }
-    if (savedSecure) {
-      try { secure = JSON.parse(savedSecure); } catch (e) {}
-    }
-
-    setActiveCategories(isSecure ? secure : standard);
-  }, [isSecure, ctxCategories, ctxStandard, ctxSecure]);
-
   // 데이터 구조 통합 (sites, items, links 자동 감지)
   const getSitesList = (category: any) => {
+    if (!category) return [];
     return category.sites || category.items || category.links || [];
   };
 
-  // [상태값 번역 및 색상 매핑 헬퍼] normal -> 정상(초록), busy -> 혼잡(주황), slow -> 지연(빨강)
+  useEffect(() => {
+    const getActiveData = () => {
+      // 기본값 설정
+      let standard = ctxStandard || ctxCategories || [];
+      let secure = ctxSecure || [];
+
+      // [대체 불가능한 무적의 로컬스토리지 스크래퍼]
+      // 브라우저 저장소를 전부 뒤져서 '가장 데이터가 많은(새로 추가된)' 카테고리 배열을 자동으로 찾아냅니다.
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key) {
+          try {
+            const rawData = localStorage.getItem(key);
+            if (rawData) {
+              const parsed = JSON.parse(rawData);
+              if (Array.isArray(parsed) && parsed.length > 0 && (parsed[0].name || parsed[0].title)) {
+                const totalSites = parsed.reduce((acc: number, cat: any) => acc + getSitesList(cat).length, 0);
+                
+                if (key.toLowerCase().includes('secure')) {
+                  const currentSecureTotal = secure.reduce((acc: number, cat: any) => acc + getSitesList(cat).length, 0);
+                  if (totalSites > currentSecureTotal) {
+                    secure = parsed;
+                  }
+                } else {
+                  const currentStandardTotal = standard.reduce((acc: number, cat: any) => acc + getSitesList(cat).length, 0);
+                  if (totalSites > currentStandardTotal) {
+                    standard = parsed;
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            // 다른 단순 텍스트 키(예: theme 등)에서 JSON 에러가 나더라도 무시하고 계속 다음 키를 탐색합니다.
+          }
+        }
+      }
+
+      // 2. 만약 로컬스토리지에도 없다면 Context에서 가장 풍부한 데이터를 비교선택
+      const standardList = ctxStandard || [];
+      const categoriesList = ctxCategories || [];
+      const totalStandard = standardList.reduce((acc: number, cat: any) => acc + getSitesList(cat).length, 0);
+      const totalCategories = categoriesList.reduce((acc: number, cat: any) => acc + getSitesList(cat).length, 0);
+      
+      if (standard.length === 0 || standard.reduce((acc: number, cat: any) => acc + getSitesList(cat).length, 0) === 0) {
+        standard = totalStandard >= totalCategories ? standardList : categoriesList;
+      }
+
+      return isSecure ? secure : standard;
+    };
+
+    setActiveCategories(getActiveData());
+  }, [isSecure, ctxCategories, ctxStandard, ctxSecure]);
+
+  // [상태값 번역 및 색상 매핑 헬퍼]
   const getStatusStyle = (status: string) => {
     const s = (status || '').toLowerCase();
     if (s === 'normal' || s === '정상') {
@@ -67,7 +102,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
 
       return (
         <div className="space-y-6 animate-fade-in">
-          {/* 뒤로가기 버튼 */}
           <button 
             onClick={() => setSelectedCategoryId(null)}
             className={`inline-flex items-center gap-2 text-xs font-bold py-2.5 px-4 rounded-xl transition-all ${
@@ -79,7 +113,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
             <ArrowLeft size={14} /> 메인으로 돌아가기
           </button>
 
-          {/* 카테고리 상세 카드 */}
           <div className={`p-6 rounded-2xl border ${
             isSecure ? 'bg-zinc-900/40 border-zinc-800/80' : 'bg-white border-slate-200 shadow-sm'
           }`}>
@@ -99,7 +132,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
               </span>
             </div>
 
-            {/* 전체 주소 목록 - 3열 배치 */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {allSites.map((item: any) => {
                 const siteName = item.name || item.title || "이름 없음";
@@ -118,7 +150,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                     }`}
                   >
                     <div className="flex items-center truncate pr-4">
-                      {/* 네온 이니셜 로고 */}
                       <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs mr-3 flex-shrink-0 ${
                         isSecure 
                           ? 'bg-zinc-900 border border-orange-500/20 text-orange-400 shadow-[0_0_8px_rgba(249,115,22,0.15)]' 
@@ -162,7 +193,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
             }`}
           >
             <div>
-              {/* 카테고리 헤더 - 실시간 동적 숫자 카운트 반영 */}
               <div className={`flex justify-between items-center mb-4 pb-2 border-b border-dashed ${
                 isSecure ? 'border-zinc-800/60' : 'border-slate-100'
               }`}>
@@ -176,7 +206,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                 </span>
               </div>
 
-              {/* 내부 사이트 리스트 - 정확히 최대 5개만 잘라서(slice) 노출 */}
               <div className="space-y-2.5">
                 {sites.slice(0, 5).map((item: any) => {
                   const siteName = item.name || item.title || "이름 없음";
@@ -195,7 +224,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                       }`}
                     >
                       <div className="flex items-center truncate mr-2">
-                        {/* 네온 이니셜 로고 */}
                         <div className={`w-7 h-7 rounded-lg flex items-center justify-center font-bold text-xs mr-2 flex-shrink-0 ${
                           isSecure 
                             ? 'bg-zinc-900 border border-orange-500/20 text-orange-400 shadow-[0_0_8px_rgba(249,115,22,0.1)]' 
@@ -214,7 +242,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
               </div>
             </div>
 
-            {/* 등록된 사이트가 5개를 초과할 때만 활성화되는 '더보기' 유도 버튼 */}
             {sites.length > 5 && (
               <button
                 onClick={() => setSelectedCategoryId(category.id)}
