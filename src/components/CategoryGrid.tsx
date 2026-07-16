@@ -1,4 +1,4 @@
-import { Fragment, useState } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import {
   BookOpen, Tv, Film, Flame, Download, Dices, MessageSquare, Shield,
   ShoppingCart, ChevronRight, LucideIcon, ExternalLink, Zap, ArrowLeft,
@@ -156,14 +156,37 @@ function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean
 
 export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
   const { isSecure } = useTheme();
-  const { categories, interAds } = useData();
+  const { categories: contextCategories, interAds } = useData();
 
-  // 더보기 클릭 시 개별 카테고리 상세로 전환하기 위한 로컬 상태(State)
+  // 1. [실시간 하이재킹] useData()의 카테고리 대신 로컬스토리지 데이터를 실시간으로 우선 로드하는 상태 구현
+  const [categories, setCategories] = useState<any[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+
+  useEffect(() => {
+    // 관리자 페이지에서 저장하는 표준 브라우저 키 검증
+    const key = isSecure ? 'secureCategories' : 'categories';
+    const fallbackKey = isSecure ? 'secure_categories' : 'standardCategories';
+    const saved = localStorage.getItem(key) || localStorage.getItem(fallbackKey);
+    
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setCategories(parsed);
+          return;
+        }
+      } catch (e) {
+        console.error('Error parsing categories from localStorage:', e);
+      }
+    }
+    
+    // 데이터가 로컬스토리지에 존재하지 않을 때만 백업용 원본 컨텍스트 바인딩
+    setCategories(contextCategories || []);
+  }, [isSecure, contextCategories]);
 
   // Build a map: index -> ads that should render after that category index
   const adsAfterIndex = new Map<number, InterAd[]>();
-  interAds
+  (interAds || [])
     .filter((a) => a.isActive)
     .forEach((ad) => {
       const arr = adsAfterIndex.get(ad.targetCategoryIndex) || [];
@@ -180,6 +203,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
     if (activeCategory) {
       const IconComponent = iconMap[activeCategory.icon] || ChevronRight;
       const colors = colorMap[activeCategory.color] || colorMap.blue;
+      const sitesList = activeCategory.sites || [];
 
       return (
         <div className="space-y-6 animate-fade-in w-full mt-8">
@@ -218,13 +242,13 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
               <span className={`text-xs font-mono font-bold px-3 py-1 rounded-full ${
                 isSecure ? 'bg-white/[0.04] text-slate-400' : 'bg-slate-100 text-slate-500'
               }`}>
-                총 {activeCategory.sites.length}개
+                총 {sitesList.length}개
               </span>
             </div>
 
-            {/* 전체 주소 목록 - PC 및 대화면 최적화 배치 */}
+            {/* 전체 주소 목록 */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {activeCategory.sites.map((site) => (
+              {sitesList.map((site: any) => (
                 <div 
                   key={site.id} 
                   className={`rounded-xl border p-1 ${
@@ -249,6 +273,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
       {categories.map((category, index) => {
         const IconComponent = iconMap[category.icon] || ChevronRight;
         const colors = colorMap[category.color] || colorMap.blue;
+        const sitesList = category.sites || [];
 
         return (
           <Fragment key={category.id}>
@@ -268,20 +293,20 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                     {category.name}
                   </h3>
                   <span className={`text-[9px] font-mono ${isSecure ? 'text-slate-600' : 'text-slate-400'}`}>
-                    {category.sites.length}
+                    {sitesList.length}
                   </span>
                 </div>
 
                 {/* Site List — Sliced to max 5 */}
                 <div className="space-y-0.5">
-                  {category.sites.slice(0, 5).map((site) => (
+                  {sitesList.slice(0, 5).map((site: any) => (
                     <SiteRow key={site.id} site={site} isSecure={isSecure} onClick={onSiteClick} />
                   ))}
                 </div>
               </div>
 
               {/* 더보기 버튼 - 등록된 주소가 5개를 초과할 때만 노출 */}
-              {category.sites.length > 5 && (
+              {sitesList.length > 5 && (
                 <button
                   onClick={() => setSelectedCategoryId(category.id)}
                   className={`mt-3 w-full py-2 sm:py-2.5 text-center text-[11px] font-bold rounded-xl transition-all border border-dashed hover:scale-[1.01] active:scale-[0.99] ${
@@ -290,7 +315,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                       : 'bg-slate-50/50 text-slate-500 border-slate-200 hover:text-blue-600 hover:border-blue-500/30 hover:bg-blue-50/50'
                   }`}
                 >
-                  더보기 (+{category.sites.length - 5}개 더보기)
+                  더보기 (+{sitesList.length - 5}개 더보기)
                 </button>
               )}
             </div>
