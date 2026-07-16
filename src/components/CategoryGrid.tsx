@@ -1,7 +1,7 @@
-import { Fragment } from 'react';
+import { Fragment, useState } from 'react';
 import {
   BookOpen, Tv, Film, Flame, Download, Dices, MessageSquare, Shield,
-  ShoppingCart, ChevronRight, LucideIcon, ExternalLink, Zap,
+  ShoppingCart, ChevronRight, LucideIcon, ExternalLink, Zap, ArrowLeft,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useData } from '../context/DataContext';
@@ -28,10 +28,10 @@ const colorMap: Record<string, { dark: string; light: string; icon: string }> = 
   green:  { dark: 'border-white/8 hover:border-emerald-400/30',      light: 'border-slate-200/60 hover:border-emerald-300',   icon: 'text-emerald-400' },
   red:    { dark: 'border-white/8 hover:border-red-400/30',          light: 'border-slate-200/60 hover:border-red-300',       icon: 'text-red-400' },
   orange: { dark: 'border-white/8 hover:border-orange-400/30',       light: 'border-slate-200/60 hover:border-orange-300',   icon: 'text-orange-400' },
-  teal:   { dark: 'border-white/8 hover:border-teal-400/30',          light: 'border-slate-200/60 hover:border-teal-300',     icon: 'text-teal-400' },
+  teal:   { dark: 'border-white/8 hover:border-teal-400/30',          light: 'border-slate-200/60 hover:border-teal-300',      icon: 'text-teal-400' },
   yellow: { dark: 'border-white/8 hover:border-yellow-400/30',       light: 'border-slate-200/60 hover:border-yellow-300',   icon: 'text-yellow-500' },
   indigo: { dark: 'border-white/8 hover:border-indigo-400/30',       light: 'border-slate-200/60 hover:border-indigo-300',   icon: 'text-indigo-400' },
-  cyan:   { dark: 'border-white/8 hover:border-cyan-400/30',         light: 'border-slate-200/60 hover:border-cyan-300',     icon: 'text-cyan-400' },
+  cyan:   { dark: 'border-white/8 hover:border-cyan-400/30',          light: 'border-slate-200/60 hover:border-cyan-300',      icon: 'text-cyan-400' },
 };
 
 interface SiteRowProps {
@@ -158,6 +158,9 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
   const { isSecure } = useTheme();
   const { categories, interAds } = useData();
 
+  // 더보기 클릭 시 개별 카테고리 상세로 전환하기 위한 로컬 상태(State)
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
+
   // Build a map: index -> ads that should render after that category index
   const adsAfterIndex = new Map<number, InterAd[]>();
   interAds
@@ -168,6 +171,79 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
       adsAfterIndex.set(ad.targetCategoryIndex, arr);
     });
 
+  // ----------------------------------------------------
+  // [상세 보기 화면] 더보기를 눌렀을 때 나타나는 개별 카테고리 상세 페이지
+  // ----------------------------------------------------
+  if (selectedCategoryId) {
+    const activeCategory = categories.find((c) => c.id === selectedCategoryId);
+
+    if (activeCategory) {
+      const IconComponent = iconMap[activeCategory.icon] || ChevronRight;
+      const colors = colorMap[activeCategory.color] || colorMap.blue;
+
+      return (
+        <div className="space-y-6 animate-fade-in w-full mt-8">
+          {/* 뒤로가기 버튼 */}
+          <button 
+            onClick={() => setSelectedCategoryId(null)}
+            className={`inline-flex items-center gap-2 text-xs font-bold py-2.5 px-4 rounded-xl transition-all hover:scale-[1.01] active:scale-[0.99] ${
+              isSecure 
+                ? 'bg-white/[0.02] border border-white/10 text-slate-400 hover:text-white' 
+                : 'bg-white border border-slate-200 text-slate-600 hover:text-slate-900 shadow-sm'
+            }`}
+          >
+            <ArrowLeft size={14} /> 메인으로 돌아가기
+          </button>
+
+          {/* 카테고리 상세 카드 */}
+          <div className={`p-6 rounded-2xl border ${
+            isSecure 
+              ? `glass-dark ${colors.dark}` 
+              : `glass-light ${colors.light}`
+          }`}>
+            <div className={`flex items-center gap-3 mb-6 pb-4 border-b ${
+              isSecure ? 'border-white/[0.06]' : 'border-slate-200/60'
+            }`}>
+              <div className={`p-2 rounded-xl ${isSecure ? 'bg-white/[0.02]' : 'bg-slate-100'}`}>
+                <IconComponent size={20} className={colors.icon} />
+              </div>
+              <div className="flex-1">
+                <h2 className={`text-lg font-bold tracking-tight ${isSecure ? 'text-white' : 'text-slate-900'}`}>
+                  {activeCategory.name} 전체 목록
+                </h2>
+                <p className={`text-xs mt-0.5 ${isSecure ? 'text-slate-500' : 'text-slate-400'}`}>
+                  실시간으로 안전하고 쾌적하게 연결되는 전체 주소 리스트입니다.
+                </p>
+              </div>
+              <span className={`text-xs font-mono font-bold px-3 py-1 rounded-full ${
+                isSecure ? 'bg-white/[0.04] text-slate-400' : 'bg-slate-100 text-slate-500'
+              }`}>
+                총 {activeCategory.sites.length}개
+              </span>
+            </div>
+
+            {/* 전체 주소 목록 - PC 및 대화면 최적화 배치 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+              {activeCategory.sites.map((site) => (
+                <div 
+                  key={site.id} 
+                  className={`rounded-xl border p-1 ${
+                    isSecure ? 'border-white/[0.02] bg-white/[0.01]' : 'border-slate-100 bg-slate-50/50'
+                  }`}
+                >
+                  <SiteRow site={site} isSecure={isSecure} onClick={onSiteClick} />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    }
+  }
+
+  // ----------------------------------------------------
+  // [메인 대문 화면] 카테고리별 최대 5개씩 바둑판으로 렌더링
+  // ----------------------------------------------------
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 md:gap-6 w-full mt-8">
       {categories.map((category, index) => {
@@ -176,33 +252,50 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
 
         return (
           <Fragment key={category.id}>
+            {/* 1. 카테고리 상자 */}
             <div
-              className={`rounded-2xl border p-2.5 sm:p-3 transition-all duration-200 ${
+              className={`rounded-2xl border p-2.5 sm:p-3 flex flex-col justify-between transition-all duration-200 ${
                 isSecure
                   ? `glass-dark ${colors.dark}`
                   : `glass-light ${colors.light}`
               }`}
             >
-              {/* Category Header — compact */}
-              <div className={`flex items-center gap-2 mb-2 pb-2 border-b ${isSecure ? 'border-white/[0.06]' : 'border-slate-200/60'}`}>
-                <IconComponent size={13} className={colors.icon} />
-                <h3 className={`text-xs font-bold flex-1 tracking-tight ${isSecure ? 'text-slate-200' : 'text-slate-700'}`}>
-                  {category.name}
-                </h3>
-                <span className={`text-[9px] font-mono ${isSecure ? 'text-slate-600' : 'text-slate-400'}`}>
-                  {category.sites.length}
-                </span>
+              <div>
+                {/* Category Header */}
+                <div className={`flex items-center gap-2 mb-2 pb-2 border-b ${isSecure ? 'border-white/[0.06]' : 'border-slate-200/60'}`}>
+                  <IconComponent size={13} className={colors.icon} />
+                  <h3 className={`text-xs font-bold flex-1 tracking-tight ${isSecure ? 'text-slate-200' : 'text-slate-700'}`}>
+                    {category.name}
+                  </h3>
+                  <span className={`text-[9px] font-mono ${isSecure ? 'text-slate-600' : 'text-slate-400'}`}>
+                    {category.sites.length}
+                  </span>
+                </div>
+
+                {/* Site List — Sliced to max 5 */}
+                <div className="space-y-0.5">
+                  {category.sites.slice(0, 5).map((site) => (
+                    <SiteRow key={site.id} site={site} isSecure={isSecure} onClick={onSiteClick} />
+                  ))}
+                </div>
               </div>
 
-              {/* Site List — high density */}
-              <div className="space-y-0.5">
-                {category.sites.map((site) => (
-                  <SiteRow key={site.id} site={site} isSecure={isSecure} onClick={onSiteClick} />
-                ))}
-              </div>
+              {/* 더보기 버튼 - 등록된 주소가 5개를 초과할 때만 노출 */}
+              {category.sites.length > 5 && (
+                <button
+                  onClick={() => setSelectedCategoryId(category.id)}
+                  className={`mt-3 w-full py-2 sm:py-2.5 text-center text-[11px] font-bold rounded-xl transition-all border border-dashed hover:scale-[1.01] active:scale-[0.99] ${
+                    isSecure
+                      ? 'bg-white/[0.02] text-slate-400 border-white/10 hover:text-orange-400 hover:border-orange-400/30 hover:bg-orange-400/5'
+                      : 'bg-slate-50/50 text-slate-500 border-slate-200 hover:text-blue-600 hover:border-blue-500/30 hover:bg-blue-50/50'
+                  }`}
+                >
+                  더보기 (+{category.sites.length - 5}개 더보기)
+                </button>
+              )}
             </div>
 
-            {/* Inter-category ads after this index */}
+            {/* 2. 카테고리 하단 중간 광고 */}
             {(adsAfterIndex.get(index) || []).map((ad) => (
               <InterAdCard key={ad.id} ad={ad} isSecure={isSecure} onClick={onSiteClick} />
             ))}
