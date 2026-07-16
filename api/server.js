@@ -3,9 +3,25 @@ require('dotenv').config();
 const express = require('express');
 const mysql = require('mysql2/promise');
 const cors = require('cors');
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
+const logoUploadDir =
+  process.env.LOGO_UPLOAD_DIR || '/home/user/web/junchae.com/public_html/uploads/logos';
+const logoPublicPath = '/uploads/logos';
+const maxLogoSize = 2 * 1024 * 1024;
+const allowedLogoExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.ico']);
+const allowedLogoMimeTypes = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+]);
 
 app.use(cors());
 app.use(express.json());
@@ -43,6 +59,47 @@ const editableSiteColumns = [
   'status',
   'sort_order',
 ];
+
+function ensureLogoUploadDir() {
+  fs.mkdirSync(logoUploadDir, { recursive: true });
+}
+
+function safeLogoFileName(originalName) {
+  const ext = path.extname(originalName || '').toLowerCase();
+  const safeExt = allowedLogoExtensions.has(ext) ? ext : '.png';
+  const random = crypto.randomBytes(8).toString('hex');
+  return `logo-${Date.now()}-${random}${safeExt}`;
+}
+
+function logoUrlForFile(fileName) {
+  return `${logoPublicPath}/${fileName}`;
+}
+
+const logoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    try {
+      ensureLogoUploadDir();
+      cb(null, logoUploadDir);
+    } catch (err) {
+      cb(err);
+    }
+  },
+  filename: (req, file, cb) => {
+    cb(null, safeLogoFileName(file.originalname));
+  },
+});
+
+const uploadLogo = multer({
+  storage: logoStorage,
+  limits: { fileSize: maxLogoSize },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (!allowedLogoExtensions.has(ext) || !allowedLogoMimeTypes.has(file.mimetype)) {
+      return cb(new Error('INVALID_LOGO_FILE_TYPE'));
+    }
+    return cb(null, true);
+  },
+});
 
 function jsonError(res, status, error, message) {
   return res.status(status).json({
@@ -126,6 +183,88 @@ app.get('/api/sites', asyncRoute(async (req, res) => {
     `SELECT ${siteColumns.join(', ')} FROM sites ORDER BY sort_order ASC, id ASC`
   );
   res.json({ ok: true, data: rows });
+}));
+
+app.post('/api/uploads/logo', (req, res) => {
+  uploadLogo.single('logo')(req, res, (err) => {
+    if (err) {
+      console.error('Logo upload error:', err);
+      const error =
+        err.code === 'LIMIT_FILE_SIZE'
+          ? 'LOGO_FILE_TOO_LARGE'
+          : err.message === 'INVALID_LOGO_FILE_TYPE'
+            ? 'INVALID_LOGO_FILE_TYPE'
+            : 'LOGO_UPLOAD_FAILED';
+      return jsonError(res, 400, error);
+    }
+
+    if (!req.file) {
+      return jsonError(res, 400, 'LOGO_FILE_REQUIRED', 'form-data field "logo" is required.');
+    }
+
+    return res.status(201).json({
+      ok: true,
+      data: { url: logoUrlForFile(req.file.filename) },
+    });
+  });
+});
+
+app.post('/api/uploads/logo/from-url', asyncRoute(async (req, res) => {
+  const sourceUrl = normalizeOptionalText(req.body?.url);
+  if (!sourceUrl) {
+    return jsonError(res, 400, 'URL_REQUIRED', 'url is required.');
+  }
+
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(sourceUrl);
+  } catch {
+    return jsonError(res, 400, 'INVALID_URL', 'A valid image URL is required.');
+  }
+
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    return jsonError(res, 400, 'INVALID_URL_PROTOCOL', 'Only http and https URLs are supported.');
+  }
+
+  const response = await fetch(parsedUrl);
+  if (!response.ok) {
+    return jsonError(res, 400, 'REMOTE_IMAGE_FETCH_FAILED');
+  }
+
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  if (contentLength > maxLogoSize) {
+    return jsonError(res, 400, 'LOGO_FILE_TOO_LARGE');
+  }
+
+  const contentType = (response.headers.get('content-type') || '').split(';')[0].toLowerCase();
+  if (!allowedLogoMimeTypes.has(contentType)) {
+    return jsonError(res, 400, 'INVALID_LOGO_FILE_TYPE');
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  if (buffer.length > maxLogoSize) {
+    return jsonError(res, 400, 'LOGO_FILE_TOO_LARGE');
+  }
+
+  const extFromPath = path.extname(parsedUrl.pathname).toLowerCase();
+  const ext =
+    allowedLogoExtensions.has(extFromPath)
+      ? extFromPath
+      : contentType === 'image/jpeg'
+        ? '.jpg'
+        : contentType === 'image/webp'
+          ? '.webp'
+          : contentType.includes('icon')
+            ? '.ico'
+            : '.png';
+  const fileName = safeLogoFileName(`remote${ext}`);
+  ensureLogoUploadDir();
+  await fs.promises.writeFile(path.join(logoUploadDir, fileName), buffer);
+
+  return res.status(201).json({
+    ok: true,
+    data: { url: logoUrlForFile(fileName) },
+  });
 }));
 
 app.post('/api/sites', asyncRoute(async (req, res) => {
