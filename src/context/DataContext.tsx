@@ -8,22 +8,25 @@ import {
 import { useTheme } from './ThemeContext';
 
 export type MobileColumns = 1 | 2;
+type Mode = 'standard' | 'secure';
+type SiteUpdatePayload = Partial<Omit<Site, 'id'>>;
 
 interface DataContextType {
   categories: Category[];
   ads: Ad[];
+  reloadSites: () => Promise<void>;
   /** Update a site's logo across the active mode's dataset */
-  updateSiteLogo: (siteId: number, logoPath: string) => void;
+  updateSiteLogo: (siteId: number, logoPath: string) => Promise<void>;
   /** Update site status across the active mode's dataset */
-  updateSiteStatus: (siteId: number, status: Site['status']) => void;
+  updateSiteStatus: (siteId: number, status: Site['status']) => Promise<void>;
   /** Update site URL across the active mode's dataset */
-  updateSiteUrl: (siteId: number, url: string) => void;
+  updateSiteUrl: (siteId: number, url: string) => Promise<void>;
   /** Update site name across the active mode's dataset */
-  updateSiteName: (siteId: number, name: string) => void;
+  updateSiteName: (siteId: number, name: string) => Promise<void>;
   /** Add a new site to a category in the active mode */
-  addSite: (categoryId: string, site: Omit<Site, 'id'>) => void;
+  addSite: (categoryId: string, site: Omit<Site, 'id'>) => Promise<void>;
   /** Remove a site from the active mode */
-  removeSite: (siteId: number) => void;
+  removeSite: (siteId: number) => Promise<void>;
   /** Add a new category to the active mode */
   addCategory: (cat: Omit<Category, 'sites'>) => void;
   /** Remove a category from the active mode */
@@ -44,24 +47,25 @@ interface DataContextType {
   standardAds: Ad[];
   secureAds: Ad[];
   /** Update functions that target a specific mode regardless of current toggle */
-  updateSiteLogoInMode: (mode: 'standard' | 'secure', siteId: number, logoPath: string) => void;
-  updateSiteStatusInMode: (mode: 'standard' | 'secure', siteId: number, status: Site['status']) => void;
-  updateSiteUrlInMode: (mode: 'standard' | 'secure', siteId: number, url: string) => void;
-  updateSiteNameInMode: (mode: 'standard' | 'secure', siteId: number, name: string) => void;
-  addSiteInMode: (mode: 'standard' | 'secure', categoryId: string, site: Omit<Site, 'id'>) => void;
-  removeSiteInMode: (mode: 'standard' | 'secure', siteId: number) => void;
-  addCategoryInMode: (mode: 'standard' | 'secure', cat: Omit<Category, 'sites'>) => void;
-  removeCategoryInMode: (mode: 'standard' | 'secure', categoryId: string) => void;
-  updateCategoryNameInMode: (mode: 'standard' | 'secure', categoryId: string, name: string) => void;
-  updateAdInMode: (mode: 'standard' | 'secure', adId: number, updates: Partial<Ad>) => void;
-  addAdInMode: (mode: 'standard' | 'secure', ad: Omit<Ad, 'id'>) => void;
-  removeAdInMode: (mode: 'standard' | 'secure', adId: number) => void;
-  getModeData: (mode: 'standard' | 'secure') => { categories: Category[]; ads: Ad[]; interAds: InterAd[] };
+  updateSiteInMode: (mode: Mode, siteId: number, updates: SiteUpdatePayload) => Promise<void>;
+  updateSiteLogoInMode: (mode: Mode, siteId: number, logoPath: string) => Promise<void>;
+  updateSiteStatusInMode: (mode: Mode, siteId: number, status: Site['status']) => Promise<void>;
+  updateSiteUrlInMode: (mode: Mode, siteId: number, url: string) => Promise<void>;
+  updateSiteNameInMode: (mode: Mode, siteId: number, name: string) => Promise<void>;
+  addSiteInMode: (mode: Mode, categoryId: string, site: Omit<Site, 'id'>) => Promise<void>;
+  removeSiteInMode: (mode: Mode, siteId: number) => Promise<void>;
+  addCategoryInMode: (mode: Mode, cat: Omit<Category, 'sites'>) => void;
+  removeCategoryInMode: (mode: Mode, categoryId: string) => void;
+  updateCategoryNameInMode: (mode: Mode, categoryId: string, name: string) => void;
+  updateAdInMode: (mode: Mode, adId: number, updates: Partial<Ad>) => void;
+  addAdInMode: (mode: Mode, ad: Omit<Ad, 'id'>) => void;
+  removeAdInMode: (mode: Mode, adId: number) => void;
+  getModeData: (mode: Mode) => { categories: Category[]; ads: Ad[]; interAds: InterAd[] };
   /** Inter-category ads (in-feed native ads) */
   interAds: InterAd[];
-  addInterAdInMode: (mode: 'standard' | 'secure', ad: Omit<InterAd, 'id'>) => void;
-  updateInterAdInMode: (mode: 'standard' | 'secure', adId: string, updates: Partial<InterAd>) => void;
-  removeInterAdInMode: (mode: 'standard' | 'secure', adId: string) => void;
+  addInterAdInMode: (mode: Mode, ad: Omit<InterAd, 'id'>) => void;
+  updateInterAdInMode: (mode: Mode, adId: string, updates: Partial<InterAd>) => void;
+  removeInterAdInMode: (mode: Mode, adId: string) => void;
   /** Mobile banner column setting */
   mobileColumns: MobileColumns;
   setMobileColumns: (c: MobileColumns) => void;
@@ -87,9 +91,10 @@ const toStringValue = (value: unknown, fallback = '') =>
 
 const sanitizeCategories = (items: unknown): Category[] | null => {
   if (!Array.isArray(items)) return null;
+  if (!items.every(isRecord)) return null;
+  if (!items.every((cat) => Array.isArray(cat.sites))) return null;
 
   return items
-    .filter(isRecord)
     .map((cat, index) => ({
       id: toStringValue(cat.id, `category-${index + 1}`),
       name: toStringValue(cat.name, 'Untitled Category'),
@@ -156,6 +161,27 @@ const mapApiSitesToCategories = (payload: unknown): Category[] | null => {
   return null;
 };
 
+const apiRequest = async (path: string, init?: RequestInit) => {
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...init?.headers,
+    },
+  });
+  const payload = await res.json().catch(() => null);
+
+  if (!res.ok || !isRecord(payload) || payload.ok !== true) {
+    const message =
+      isRecord(payload) && typeof payload.message === 'string'
+        ? payload.message
+        : `API request failed with ${res.status}`;
+    throw new Error(message);
+  }
+
+  return payload;
+};
+
 export function DataProvider({ children }: { children: ReactNode }) {
   const { mode } = useTheme();
 
@@ -169,39 +195,31 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [telegramLink, setTelegramLinkState] = useState('https://t.me/junchae_admin');
   const [telegramVisible, setTelegramVisibleState] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
+  const reloadSites = useCallback(async () => {
+    const payload = await apiRequest('/api/sites');
+    const nextCategories = mapApiSitesToCategories(payload);
 
-    fetch('/api/sites')
-      .then((res) => {
-        if (!res.ok) throw new Error(`API request failed with ${res.status}`);
-        return res.json();
-      })
-      .then((payload) => {
-        const nextCategories = mapApiSitesToCategories(payload);
-        if (!cancelled && nextCategories) {
-          setStdCats(nextCategories);
-        }
-      })
-      .catch((err) => {
-        console.error('Failed to load API sites. Falling back to static data.', err);
-        if (!cancelled) {
-          setStdCats(sanitizeCategories(standardCategories) ?? standardCategories);
-        }
-      });
+    if (!nextCategories) {
+      throw new Error('Invalid /api/sites response shape.');
+    }
 
-    return () => {
-      cancelled = true;
-    };
+    setStdCats(nextCategories);
   }, []);
+
+  useEffect(() => {
+    reloadSites().catch((err) => {
+        console.error('Failed to load API sites. Falling back to static data.', err);
+        setStdCats(sanitizeCategories(standardCategories) ?? standardCategories);
+      });
+  }, [reloadSites]);
   const isStandard = mode === 'standard';
   const categories = isStandard ? stdCats : secCats;
   const ads = isStandard ? stdAds : secAds;
   const interAds = isStandard ? stdInterAds : secInterAds;
 
-  const catsSetter = (m: 'standard' | 'secure') => (m === 'standard' ? setStdCats : setSecCats);
-  const adsSetter = (m: 'standard' | 'secure') => (m === 'standard' ? setStdAds : setSecAds);
-  const interAdsSetter = (m: 'standard' | 'secure') => (m === 'standard' ? setStdInterAds : setSecInterAds);
+  const catsSetter = (m: Mode) => (m === 'standard' ? setStdCats : setSecCats);
+  const adsSetter = (m: Mode) => (m === 'standard' ? setStdAds : setSecAds);
+  const interAdsSetter = (m: Mode) => (m === 'standard' ? setStdInterAds : setSecInterAds);
 
   // Load Telegram settings from localStorage on mount
   useState(() => {
@@ -225,60 +243,99 @@ export function DataProvider({ children }: { children: ReactNode }) {
     try { localStorage.setItem('telegram_visible', String(visible)); } catch {}
   }, []);
 
-  const updateSiteLogoInMode = useCallback((m: 'standard' | 'secure', siteId: number, logoPath: string) => {
+  const updateSiteLocal = useCallback((m: Mode, siteId: number, updates: SiteUpdatePayload) => {
     catsSetter(m)((prev: Category[]) =>
       prev.map((cat) => ({
         ...cat,
-        sites: cat.sites.map((s) => (s.id === siteId ? { ...s, logo: logoPath } : s)),
+        sites: (Array.isArray(cat.sites) ? cat.sites : []).map((s) =>
+          s.id === siteId ? { ...s, ...updates } : s
+        ),
       }))
     );
   }, []);
 
-  const updateSiteStatusInMode = useCallback((m: 'standard' | 'secure', siteId: number, status: Site['status']) => {
-    catsSetter(m)((prev: Category[]) =>
-      prev.map((cat) => ({
-        ...cat,
-        sites: cat.sites.map((s) => (s.id === siteId ? { ...s, status } : s)),
-      }))
-    );
-  }, []);
+  const updateSiteInMode = useCallback(async (m: Mode, siteId: number, updates: SiteUpdatePayload) => {
+    if (m === 'standard') {
+      await apiRequest(`/api/sites/${siteId}`, {
+        method: 'PUT',
+        body: JSON.stringify(updates),
+      });
+      await reloadSites();
+      return;
+    }
 
-  const updateSiteUrlInMode = useCallback((m: 'standard' | 'secure', siteId: number, url: string) => {
-    catsSetter(m)((prev: Category[]) =>
-      prev.map((cat) => ({
-        ...cat,
-        sites: cat.sites.map((s) => (s.id === siteId ? { ...s, url } : s)),
-      }))
-    );
-  }, []);
+    updateSiteLocal(m, siteId, updates);
+  }, [reloadSites, updateSiteLocal]);
 
-  const updateSiteNameInMode = useCallback((m: 'standard' | 'secure', siteId: number, name: string) => {
-    catsSetter(m)((prev: Category[]) =>
-      prev.map((cat) => ({
-        ...cat,
-        sites: cat.sites.map((s) => (s.id === siteId ? { ...s, name } : s)),
-      }))
-    );
-  }, []);
+  const updateSiteLogoInMode = useCallback(
+    (m: Mode, siteId: number, logoPath: string) => updateSiteInMode(m, siteId, { logo: logoPath }),
+    [updateSiteInMode]
+  );
 
-  const addSiteInMode = useCallback((m: 'standard' | 'secure', categoryId: string, site: Omit<Site, 'id'>) => {
+  const updateSiteStatusInMode = useCallback(async (m: Mode, siteId: number, status: Site['status']) => {
+    if (m === 'standard') {
+      await apiRequest(`/api/sites/${siteId}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status }),
+      });
+      await reloadSites();
+      return;
+    }
+
+    updateSiteLocal(m, siteId, { status });
+  }, [reloadSites, updateSiteLocal]);
+
+  const updateSiteUrlInMode = useCallback(
+    (m: Mode, siteId: number, url: string) => updateSiteInMode(m, siteId, { url }),
+    [updateSiteInMode]
+  );
+
+  const updateSiteNameInMode = useCallback(
+    (m: Mode, siteId: number, name: string) => updateSiteInMode(m, siteId, { name }),
+    [updateSiteInMode]
+  );
+
+  const addSiteInMode = useCallback(async (m: Mode, categoryId: string, site: Omit<Site, 'id'>) => {
+    if (m === 'standard') {
+      await apiRequest('/api/sites', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: site.name,
+          url: site.url,
+          category: categoryId,
+          description: site.description,
+          logo: site.logo,
+          status: site.status,
+          sort_order: 0,
+        }),
+      });
+      await reloadSites();
+      return;
+    }
+
     catsSetter(m)((prev: Category[]) =>
       prev.map((cat) =>
         cat.id === categoryId
-          ? { ...cat, sites: [...cat.sites, { ...site, id: Date.now() }] }
+          ? { ...cat, sites: [...(Array.isArray(cat.sites) ? cat.sites : []), { ...site, id: Date.now() }] }
           : cat
       )
     );
-  }, []);
+  }, [reloadSites]);
 
-  const removeSiteInMode = useCallback((m: 'standard' | 'secure', siteId: number) => {
+  const removeSiteInMode = useCallback(async (m: Mode, siteId: number) => {
+    if (m === 'standard') {
+      await apiRequest(`/api/sites/${siteId}`, { method: 'DELETE' });
+      await reloadSites();
+      return;
+    }
+
     catsSetter(m)((prev: Category[]) =>
       prev.map((cat) => ({
         ...cat,
-        sites: cat.sites.filter((s) => s.id !== siteId),
+        sites: (Array.isArray(cat.sites) ? cat.sites : []).filter((s) => s.id !== siteId),
       }))
     );
-  }, []);
+  }, [reloadSites]);
 
   const addCategoryInMode = useCallback((m: 'standard' | 'secure', cat: Omit<Category, 'sites'>) => {
     catsSetter(m)((prev: Category[]) => [...prev, { ...cat, sites: [] }]);
@@ -345,6 +402,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     <DataContext.Provider
       value={{
         categories, ads,
+        reloadSites,
         updateSiteLogo, updateSiteStatus, updateSiteUrl, updateSiteName,
         addSite, removeSite,
         addCategory, removeCategory, updateCategoryName,
@@ -352,6 +410,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         allSites,
         standardCategories: stdCats, secureCategories: secCats,
         standardAds: stdAds, secureAds: secAds,
+        updateSiteInMode,
         updateSiteLogoInMode, updateSiteStatusInMode, updateSiteUrlInMode, updateSiteNameInMode,
         addSiteInMode, removeSiteInMode,
         addCategoryInMode, removeCategoryInMode, updateCategoryNameInMode,

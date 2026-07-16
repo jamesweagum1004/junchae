@@ -19,7 +19,7 @@ export default function SiteManager() {
   const { categories } = getModeData(activeMode);
 
   const allSites: (Site & { categoryId: string; categoryName: string })[] = categories.flatMap((c) =>
-    c.sites.map((s) => ({ ...s, categoryId: c.id, categoryName: c.name }))
+    (Array.isArray(c.sites) ? c.sites : []).map((s) => ({ ...s, categoryId: c.id, categoryName: c.name }))
   );
 
   const [form, setForm] = useState({ name: '', url: '', categoryId: '', description: '', logo: '/uploads/logos/default.png' });
@@ -32,34 +32,51 @@ export default function SiteManager() {
   const [editingNameId, setEditingNameId] = useState<number | null>(null);
   const [editingNameValue, setEditingNameValue] = useState('');
 
-  const toggleStatus = (id: number) => {
+  const showError = (message: string, err: unknown) => {
+    console.error(message, err);
+    alert(message);
+  };
+
+  const toggleStatus = async (id: number) => {
     const site = allSites.find((s) => s.id === id);
     if (!site) return;
     const next: SiteStatus = site.status === 'normal' ? 'busy' : site.status === 'busy' ? 'slow' : 'normal';
-    updateSiteStatusInMode(activeMode, id, next);
+    try {
+      await updateSiteStatusInMode(activeMode, id, next);
+    } catch (err) {
+      showError('Failed to update site status.', err);
+    }
   };
 
-  const remove = (id: number) => removeSiteInMode(activeMode, id);
+  const remove = async (id: number) => {
+    try {
+      await removeSiteInMode(activeMode, id);
+    } catch (err) {
+      showError('Failed to delete site.', err);
+    }
+  };
 
-  const add = () => {
+  const add = async () => {
     if (!form.name.trim() || !form.url.trim() || !form.categoryId) return;
-    addSiteInMode(activeMode, form.categoryId, {
-      name: form.name,
-      url: form.url,
-      logo: form.logo,
-      status: 'normal',
-      description: form.description,
-    });
-    setForm({ name: '', url: '', categoryId: '', description: '', logo: '/uploads/logos/default.png' });
+    try {
+      await addSiteInMode(activeMode, form.categoryId, {
+        name: form.name,
+        url: form.url,
+        logo: form.logo,
+        status: 'normal',
+        description: form.description,
+      });
+      setForm({ name: '', url: '', categoryId: '', description: '', logo: '/uploads/logos/default.png' });
+    } catch (err) {
+      showError('Failed to add site.', err);
+    }
   };
 
-  const downloadLogo = () => {
+  const downloadLogo = async () => {
     if (!logoUrl.trim() || logoModal === null) return;
     setLogoDownloading(true);
-    setTimeout(() => {
-      const fileName = logoUrl.split('/').pop()?.split('?')[0] || 'logo.png';
-      const localPath = `/uploads/logos/${fileName}`;
-      updateSiteLogoInMode(activeMode, logoModal, localPath);
+    try {
+      await updateSiteLogoInMode(activeMode, logoModal, logoUrl.trim());
       setLogoDownloading(false);
       setLogoDownloaded(true);
       setTimeout(() => {
@@ -67,15 +84,22 @@ export default function SiteManager() {
         setLogoModal(null);
         setLogoUrl('');
       }, 1500);
-    }, 1800);
+    } catch (err) {
+      setLogoDownloading(false);
+      showError('Failed to save logo path.', err);
+    }
   };
 
-  const onFileDrop = (e: React.DragEvent, siteId: number) => {
+  const onFileDrop = async (e: React.DragEvent, siteId: number) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
     if (!file) return;
     const localPath = `/uploads/logos/${file.name}`;
-    updateSiteLogoInMode(activeMode, siteId, localPath);
+    try {
+      await updateSiteLogoInMode(activeMode, siteId, localPath);
+    } catch (err) {
+      showError('Failed to save logo path.', err);
+    }
   };
 
   const startEditUrl = (id: number, url: string) => {
@@ -83,9 +107,14 @@ export default function SiteManager() {
     setEditingUrlValue(url);
   };
 
-  const saveUrl = () => {
+  const saveUrl = async () => {
     if (editingUrlId !== null) {
-      updateSiteUrlInMode(activeMode, editingUrlId, editingUrlValue);
+      try {
+        await updateSiteUrlInMode(activeMode, editingUrlId, editingUrlValue);
+      } catch (err) {
+        showError('Failed to update site URL.', err);
+        return;
+      }
     }
     setEditingUrlId(null);
     setEditingUrlValue('');
@@ -96,9 +125,14 @@ export default function SiteManager() {
     setEditingNameValue(name);
   };
 
-  const saveName = () => {
+  const saveName = async () => {
     if (editingNameId !== null) {
-      updateSiteNameInMode(activeMode, editingNameId, editingNameValue);
+      try {
+        await updateSiteNameInMode(activeMode, editingNameId, editingNameValue);
+      } catch (err) {
+        showError('Failed to update site name.', err);
+        return;
+      }
     }
     setEditingNameId(null);
     setEditingNameValue('');
@@ -285,9 +319,14 @@ export default function SiteManager() {
                   const input = document.createElement('input');
                   input.type = 'file';
                   input.accept = 'image/*';
-                  input.onchange = (e) => {
+                  input.onchange = async (e) => {
                     const file = (e.target as HTMLInputElement).files?.[0];
-                    if (file) updateSiteLogoInMode(activeMode, logoModal, `/uploads/logos/${file.name}`);
+                    if (!file) return;
+                    try {
+                      await updateSiteLogoInMode(activeMode, logoModal, `/uploads/logos/${file.name}`);
+                    } catch (err) {
+                      showError('Failed to save logo path.', err);
+                    }
                   };
                   input.click();
                 }}
