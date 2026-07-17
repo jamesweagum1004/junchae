@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 
 type GlobalSeoSettings = {
@@ -85,8 +86,11 @@ const removeElement = (id: string) => {
 
 export default function SeoHeadManager() {
   const { mode } = useTheme();
+  const location = useLocation();
 
   useEffect(() => {
+    if (location.pathname.startsWith('/category/')) return;
+
     const dbMode = mode === 'secure' ? 'secure' : 'normal';
     let cancelled = false;
 
@@ -110,7 +114,7 @@ export default function SeoHeadManager() {
     return () => {
       cancelled = true;
     };
-  }, [mode]);
+  }, [mode, location.pathname]);
 
   useEffect(() => {
     const dbMode = mode === 'secure' ? 'secure' : 'normal';

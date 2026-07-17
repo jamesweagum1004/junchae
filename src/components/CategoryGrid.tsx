@@ -13,6 +13,7 @@ import {
   LucideIcon,
   ExternalLink,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { isVisibleAd, useData } from '../context/DataContext';
 import { Site, InterAd } from '../data/categories';
@@ -181,6 +182,7 @@ function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean
 }
 
 export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
+  const navigate = useNavigate();
   const { isSecure } = useTheme();
   const { categories, interAds } = useData();
 
@@ -198,11 +200,13 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
       {categories.map((category, index) => {
         const IconComponent = iconMap[category.icon] || ChevronRight;
         const colors = colorMap[category.color] || colorMap.blue;
+        const visibleSites = category.sites.slice(0, 5);
+        const hiddenCount = Math.max(0, category.sites.length - visibleSites.length);
 
         return (
           <Fragment key={category.id}>
             <div
-              className={`rounded-2xl border p-2.5 sm:p-3 transition-all duration-200 ${
+              className={`rounded-2xl border p-2.5 sm:p-3 transition-all duration-200 flex flex-col ${
                 isSecure
                   ? `glass-dark ${colors.dark}`
                   : `glass-light ${colors.light}`
@@ -219,10 +223,24 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
               </div>
 
               <div className="space-y-0.5">
-                {category.sites.map((site) => (
+                {visibleSites.map((site) => (
                   <SiteRow key={site.id} site={site} isSecure={isSecure} onClick={onSiteClick} />
                 ))}
               </div>
+
+              {hiddenCount > 0 && (
+                <button
+                  onClick={() => navigate(`/category/${encodeURIComponent(category.id)}`)}
+                  className={`mt-2 w-full flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition-all duration-200 ${
+                    isSecure
+                      ? 'bg-white/[0.04] text-neon-orange hover:bg-neon-orange/10 hover:text-orange-300 border border-white/[0.06] hover:border-neon-orange/30'
+                      : 'bg-slate-100/70 text-blue-700 hover:bg-blue-50 hover:text-blue-800 border border-slate-200 hover:border-blue-200'
+                  }`}
+                >
+                  {hiddenCount}개 더보기
+                  <ChevronRight size={13} />
+                </button>
+              )}
             </div>
 
             {(adsAfterIndex.get(index) || []).map((ad) => (
