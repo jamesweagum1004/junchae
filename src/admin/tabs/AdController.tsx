@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Plus,
   Trash2,
@@ -20,7 +20,7 @@ import {
 } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import ModeSubTabs from '../ModeSubTabs';
-import { InterAd } from '../../data/categories';
+import { Ad, InterAd } from '../../data/categories';
 
 const BADGE_OPTIONS = ['HOT', 'NEW', 'SALE', 'AD', 'VIP', 'SAFE', 'BEST'];
 const BADGE_COLORS: Record<string, string> = {
@@ -33,10 +33,7 @@ const BADGE_COLORS: Record<string, string> = {
 const parseImageUploadResponse = async (res: Response) => {
   const body = await res.json().catch(() => null);
   if (!res.ok || !body?.ok || typeof body.data?.url !== 'string') {
-    console.error('광고 이미지 업로드 응답 오류', {
-      status: res.status,
-      body,
-    });
+    console.error('광고 이미지 업로드 응답 오류', { status: res.status, body });
     throw new Error(body?.message || body?.error || '광고 이미지 업로드에 실패했습니다.');
   }
   return body.data.url as string;
@@ -45,12 +42,7 @@ const parseImageUploadResponse = async (res: Response) => {
 const uploadAdImage = async (file: File) => {
   const formData = new FormData();
   formData.append('image', file);
-
-  const res = await fetch('/api/uploads/ad-image', {
-    method: 'POST',
-    body: formData,
-  });
-
+  const res = await fetch('/api/uploads/ad-image', { method: 'POST', body: formData });
   return parseImageUploadResponse(res);
 };
 
@@ -66,20 +58,37 @@ export default function AdController() {
   } = useData();
   const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('standard');
   const { ads } = getModeData(activeMode);
+  const [drafts, setDrafts] = useState<Record<number, Ad>>({});
   const [saved, setSaved] = useState(false);
   const [imageModal, setImageModal] = useState<number | null>(null);
   const [imageUrl, setImageUrl] = useState('');
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    setDrafts(Object.fromEntries(ads.map((ad) => [ad.id, ad])));
+  }, [ads]);
+
+  const visibleAds = useMemo(() => ads.map((ad) => drafts[ad.id] || ad), [ads, drafts]);
+
   const showError = (message: string, err: unknown) => {
     console.error(message, err);
     alert(message);
   };
 
-  const updateAd = async (id: number, updates: Parameters<typeof updateAdInMode>[2]) => {
+  const patchDraft = (id: number, updates: Partial<Ad>) => {
+    setDrafts((current) => ({
+      ...current,
+      [id]: { ...(current[id] || ads.find((ad) => ad.id === id)), ...updates } as Ad,
+    }));
+  };
+
+  const saveAd = async (id: number, updates?: Partial<Ad>) => {
+    const draft = { ...(drafts[id] || ads.find((ad) => ad.id === id)), ...updates } as Ad | undefined;
+    if (!draft) return;
+
     try {
-      await updateAdInMode(activeMode, id, updates);
+      await updateAdInMode(activeMode, id, draft);
     } catch (err) {
       showError('광고 저장에 실패했습니다.', err);
     }
@@ -113,13 +122,16 @@ export default function AdController() {
     }
   };
 
-  const save = async () => {
+  const saveAll = async () => {
     try {
+      for (const ad of visibleAds) {
+        await updateAdInMode(activeMode, ad.id, ad);
+      }
       await reloadAds();
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err) {
-      showError('광고 설정 저장 확인에 실패했습니다.', err);
+      showError('광고 설정 저장에 실패했습니다.', err);
     }
   };
 
@@ -127,7 +139,8 @@ export default function AdController() {
     setUploadingImage(true);
     try {
       const image = await uploadAdImage(file);
-      await updateAdInMode(activeMode, adId, { image });
+      patchDraft(adId, { image });
+      await saveAd(adId, { image });
       setImageModal(null);
       setImageUrl('');
     } catch (err) {
@@ -145,14 +158,21 @@ export default function AdController() {
 
   const applyImageUrl = async () => {
     if (imageModal === null || !imageUrl.trim()) return;
-    await updateAd(imageModal, { image: imageUrl.trim() });
+    patchDraft(imageModal, { image: imageUrl.trim() });
+    await saveAd(imageModal, { image: imageUrl.trim() });
     setImageModal(null);
     setImageUrl('');
   };
 
   return (
     <div className="space-y-5">
-      <ModeSubTabs activeMode={activeMode} onModeChange={setActiveMode} />
+      <ModeSubTabs
+        activeMode={activeMode}
+        onModeChange={(mode) => {
+          setActiveMode(mode);
+          setImageModal(null);
+        }}
+      />
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 bg-obsidian-700 rounded-xl border border-obsidian-500">
         <div className="flex items-center gap-2">
@@ -163,9 +183,7 @@ export default function AdController() {
           <button
             onClick={() => setMobileColumns(1)}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-              mobileColumns === 1
-                ? 'bg-neon-orange text-white shadow-[0_0_8px_rgba(249,115,22,0.3)]'
-                : 'bg-obsidian-600 text-slate-500 hover:text-slate-300'
+              mobileColumns === 1 ? 'bg-neon-orange text-white shadow-[0_0_8px_rgba(249,115,22,0.3)]' : 'bg-obsidian-600 text-slate-500 hover:text-slate-300'
             }`}
           >
             <AlignVerticalJustifyStart size={12} /> 1열
@@ -173,9 +191,7 @@ export default function AdController() {
           <button
             onClick={() => setMobileColumns(2)}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-              mobileColumns === 2
-                ? 'bg-neon-orange text-white shadow-[0_0_8px_rgba(249,115,22,0.3)]'
-                : 'bg-obsidian-600 text-slate-500 hover:text-slate-300'
+              mobileColumns === 2 ? 'bg-neon-orange text-white shadow-[0_0_8px_rgba(249,115,22,0.3)]' : 'bg-obsidian-600 text-slate-500 hover:text-slate-300'
             }`}
           >
             <Columns size={12} /> 2열
@@ -196,19 +212,21 @@ export default function AdController() {
       </div>
 
       <div className="space-y-4">
-        {ads.map((ad) => (
+        {visibleAds.map((ad) => (
           <div key={ad.id} className="p-4 bg-obsidian-600 border border-obsidian-500 rounded-xl space-y-3">
             <div className="flex items-start justify-between gap-3">
               <div className="flex-1 min-w-0 space-y-1">
                 <input
                   value={ad.title}
-                  onChange={(e) => void updateAd(ad.id, { title: e.target.value })}
+                  onChange={(e) => patchDraft(ad.id, { title: e.target.value })}
+                  onBlur={() => void saveAd(ad.id)}
                   placeholder="배너 광고명"
                   className="w-full text-sm font-bold text-slate-200 bg-transparent border-none outline-none focus:bg-obsidian-700 rounded px-1 py-0.5 placeholder-slate-700"
                 />
                 <input
                   value={ad.subtitle}
-                  onChange={(e) => void updateAd(ad.id, { subtitle: e.target.value })}
+                  onChange={(e) => patchDraft(ad.id, { subtitle: e.target.value })}
+                  onBlur={() => void saveAd(ad.id)}
                   placeholder="광고 설명"
                   className="w-full text-xs text-slate-500 bg-transparent border-none outline-none focus:bg-obsidian-700 rounded px-1 py-0.5 placeholder-slate-700"
                 />
@@ -224,7 +242,8 @@ export default function AdController() {
               </label>
               <input
                 value={ad.url}
-                onChange={(e) => void updateAd(ad.id, { url: e.target.value })}
+                onChange={(e) => patchDraft(ad.id, { url: e.target.value })}
+                onBlur={() => void saveAd(ad.id)}
                 placeholder="https://redirect-target.com"
                 className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-slate-300 placeholder-slate-700 focus:outline-none focus:border-neon-orange font-mono"
               />
@@ -236,7 +255,10 @@ export default function AdController() {
                 {BADGE_OPTIONS.map((badge) => (
                   <button
                     key={badge}
-                    onClick={() => void updateAd(ad.id, { badge })}
+                    onClick={() => {
+                      patchDraft(ad.id, { badge });
+                      void saveAd(ad.id, { badge });
+                    }}
                     className={`text-[10px] font-black px-2 py-1 rounded transition-all ${
                       ad.badge === badge
                         ? `${BADGE_COLORS[ad.badgeColor] || 'bg-blue-500 text-white'} ring-1 ring-neon-orange`
@@ -287,7 +309,8 @@ export default function AdController() {
               <textarea
                 rows={3}
                 value={ad.script}
-                onChange={(e) => void updateAd(ad.id, { script: e.target.value })}
+                onChange={(e) => patchDraft(ad.id, { script: e.target.value })}
+                onBlur={() => void saveAd(ad.id)}
                 placeholder="<!-- 광고 스크립트 코드를 저장만 합니다. 메인 화면에서 임의 실행하지 않습니다. -->"
                 className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-slate-300 placeholder-slate-700 focus:outline-none focus:border-neon-orange font-mono resize-none"
               />
@@ -298,7 +321,8 @@ export default function AdController() {
               <input
                 type="date"
                 value={ad.expiresAt}
-                onChange={(e) => void updateAd(ad.id, { expiresAt: e.target.value })}
+                onChange={(e) => patchDraft(ad.id, { expiresAt: e.target.value })}
+                onBlur={() => void saveAd(ad.id)}
                 className="flex-1 px-3 py-1.5 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-slate-300 focus:outline-none focus:border-neon-orange"
               />
               <span className="text-xs text-slate-600">만료일</span>
@@ -308,7 +332,7 @@ export default function AdController() {
       </div>
 
       <button
-        onClick={() => void save()}
+        onClick={() => void saveAll()}
         className="w-full py-2.5 bg-neon-orange text-white text-sm font-semibold rounded-lg hover:bg-neon-orangeDark flex items-center justify-center gap-2 transition-colors"
       >
         {saved ? <CheckCircle size={14} /> : null}
@@ -412,21 +436,6 @@ function InterAdManager({ mode }: { mode: 'standard' | 'secure' }) {
     alert(message);
   };
 
-  const openNew = () => {
-    setEditing({ ...blankAd });
-    setIsNew(true);
-  };
-
-  const openEdit = (ad: InterAd) => {
-    setEditing({ ...ad });
-    setIsNew(false);
-  };
-
-  const close = () => {
-    setEditing(null);
-    setIsNew(false);
-  };
-
   const save = async () => {
     if (!editing) return;
     try {
@@ -436,7 +445,8 @@ function InterAdManager({ mode }: { mode: 'standard' | 'secure' }) {
       } else {
         await updateInterAdInMode(mode, editing.id, editing);
       }
-      close();
+      setEditing(null);
+      setIsNew(false);
     } catch (err) {
       showError('중간 광고 저장에 실패했습니다.', err);
     }
@@ -467,7 +477,7 @@ function InterAdManager({ mode }: { mode: 'standard' | 'secure' }) {
       </div>
 
       <p className="text-xs text-slate-500 mb-4 leading-relaxed">
-        placement='infeed' 광고로 저장되며, 선택한 카테고리 뒤에 표시됩니다.
+        placement='infeed' 광고로 저장되며 선택한 카테고리 뒤에 표시됩니다.
       </p>
 
       <div className="space-y-2 mb-4">
@@ -490,14 +500,10 @@ function InterAdManager({ mode }: { mode: 'standard' | 'secure' }) {
                 {ad.targetCategoryIndex + 1}번째 카테고리 뒤 · {ad.isActive ? '노출 중' : '숨김'}
               </span>
             </div>
-            <button
-              onClick={() => void toggle(ad)}
-              className="text-slate-500 hover:text-neon-orange transition-colors"
-              title={ad.isActive ? '노출 중' : '숨김'}
-            >
+            <button onClick={() => void toggle(ad)} className="text-slate-500 hover:text-neon-orange transition-colors">
               {ad.isActive ? <ToggleRight size={20} className="text-neon-orange" /> : <ToggleLeft size={20} />}
             </button>
-            <button onClick={() => openEdit(ad)} className="text-slate-500 hover:text-slate-300 transition-colors">
+            <button onClick={() => { setEditing({ ...ad }); setIsNew(false); }} className="text-slate-500 hover:text-slate-300 transition-colors">
               <Pencil size={14} />
             </button>
             <button onClick={() => void remove(ad.id)} className="text-slate-500 hover:text-red-400 transition-colors">
@@ -508,20 +514,18 @@ function InterAdManager({ mode }: { mode: 'standard' | 'secure' }) {
       </div>
 
       <button
-        onClick={openNew}
+        onClick={() => { setEditing({ ...blankAd }); setIsNew(true); }}
         className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-neon-orange/10 border border-neon-orange/20 text-neon-orange text-sm font-bold hover:bg-neon-orange/20 transition-colors"
       >
         <Plus size={14} /> 중간 광고 추가
       </button>
 
       {editing && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={close}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setEditing(null)}>
           <div className="glass-dark rounded-2xl p-6 w-full max-w-md space-y-4 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between pb-3 border-b border-white/[0.06]">
-              <h4 className="text-sm font-bold text-white tracking-tight">
-                {isNew ? '중간 광고 추가' : '중간 광고 수정'}
-              </h4>
-              <button onClick={close} className="text-slate-500 hover:text-white transition-colors">
+              <h4 className="text-sm font-bold text-white tracking-tight">{isNew ? '중간 광고 추가' : '중간 광고 수정'}</h4>
+              <button onClick={() => setEditing(null)} className="text-slate-500 hover:text-white transition-colors">
                 <X size={18} />
               </button>
             </div>
@@ -540,85 +544,61 @@ function InterAdManager({ mode }: { mode: 'standard' | 'secure' }) {
               </select>
             </div>
 
-            <div>
-              <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5 block">광고 제목</label>
-              <input
-                type="text"
-                value={editing.title}
-                onChange={(e) => setEditing({ ...editing, title: e.target.value })}
-                placeholder="중간 광고 제목"
-                className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange/40 transition-all"
-              />
+            <input
+              type="text"
+              value={editing.title}
+              onChange={(e) => setEditing({ ...editing, title: e.target.value })}
+              placeholder="중간 광고 제목"
+              className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange/40 transition-all"
+            />
+            <input
+              type="text"
+              value={editing.description}
+              onChange={(e) => setEditing({ ...editing, description: e.target.value })}
+              placeholder="중간 광고 설명"
+              className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange/40 transition-all"
+            />
+            <input
+              type="text"
+              value={editing.redirectUrl}
+              onChange={(e) => setEditing({ ...editing, redirectUrl: e.target.value })}
+              placeholder="https://example.com"
+              className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white font-mono placeholder-slate-600 focus:outline-none focus:border-neon-orange/40 transition-all"
+            />
+            <input
+              type="text"
+              value={editing.imageUrl}
+              onChange={(e) => setEditing({ ...editing, imageUrl: e.target.value })}
+              placeholder="/uploads/ads/mid-1.png 또는 외부 URL"
+              className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white font-mono placeholder-slate-600 focus:outline-none focus:border-neon-orange/40 transition-all"
+            />
+
+            <div className="flex gap-2 flex-wrap">
+              {['AD', 'HOT', 'NEW', 'VIP', '추천', '이벤트'].map((badge) => (
+                <button
+                  key={badge}
+                  onClick={() => setEditing({ ...editing, badge })}
+                  className={`px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
+                    editing.badge === badge
+                      ? 'bg-neon-orange text-white'
+                      : 'bg-obsidian-700 text-slate-400 hover:text-slate-200 border border-white/[0.06]'
+                  }`}
+                >
+                  {badge}
+                </button>
+              ))}
             </div>
 
-            <div>
-              <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5 block">설명</label>
-              <input
-                type="text"
-                value={editing.description}
-                onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-                placeholder="중간 광고 설명"
-                className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange/40 transition-all"
-              />
-            </div>
-
-            <div>
-              <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5 block">URL</label>
-              <input
-                type="text"
-                value={editing.redirectUrl}
-                onChange={(e) => setEditing({ ...editing, redirectUrl: e.target.value })}
-                placeholder="https://example.com"
-                className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white font-mono placeholder-slate-600 focus:outline-none focus:border-neon-orange/40 transition-all"
-              />
-            </div>
-
-            <div>
-              <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5 block">이미지 URL</label>
-              <input
-                type="text"
-                value={editing.imageUrl}
-                onChange={(e) => setEditing({ ...editing, imageUrl: e.target.value })}
-                placeholder="/uploads/ads/mid-1.png 또는 외부 URL"
-                className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white font-mono placeholder-slate-600 focus:outline-none focus:border-neon-orange/40 transition-all"
-              />
-            </div>
-
-            <div>
-              <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5 block">배지</label>
-              <div className="flex gap-2 flex-wrap">
-                {['AD', 'HOT', 'NEW', 'VIP', '추천', '이벤트'].map((badge) => (
-                  <button
-                    key={badge}
-                    onClick={() => setEditing({ ...editing, badge })}
-                    className={`px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
-                      editing.badge === badge
-                        ? 'bg-neon-orange text-white'
-                        : 'bg-obsidian-700 text-slate-400 hover:text-slate-200 border border-white/[0.06]'
-                    }`}
-                  >
-                    {badge}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5 block">만료일</label>
-              <input
-                type="date"
-                value={editing.expiresAt || ''}
-                onChange={(e) => setEditing({ ...editing, expiresAt: e.target.value })}
-                className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-neon-orange/40 transition-all"
-              />
-            </div>
+            <input
+              type="date"
+              value={editing.expiresAt || ''}
+              onChange={(e) => setEditing({ ...editing, expiresAt: e.target.value })}
+              className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white focus:outline-none focus:border-neon-orange/40 transition-all"
+            />
 
             <div className="flex items-center justify-between pt-2">
               <span className="text-xs text-slate-400">노출 여부</span>
-              <button
-                onClick={() => setEditing({ ...editing, isActive: !editing.isActive })}
-                className="flex items-center gap-2"
-              >
+              <button onClick={() => setEditing({ ...editing, isActive: !editing.isActive })} className="flex items-center gap-2">
                 {editing.isActive ? (
                   <><ToggleRight size={24} className="text-neon-orange" /><span className="text-xs text-neon-orange font-semibold">ON</span></>
                 ) : (

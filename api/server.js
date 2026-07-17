@@ -52,6 +52,7 @@ const db = mysql.createPool({
 
 const siteColumns = [
   'id',
+  'mode',
   'name',
   'url',
   'logo',
@@ -92,6 +93,7 @@ const adColumns = [
 ];
 
 const editableSiteColumns = [
+  'mode',
   'name',
   'url',
   'category',
@@ -232,6 +234,7 @@ function normalizeDate(value) {
 
 function normalizeSiteInput(body) {
   return {
+    mode: normalizeMode(body.mode),
     name: normalizeRequiredText(body.name),
     url: normalizeRequiredText(body.url),
     category: normalizeOptionalText(body.category),
@@ -250,6 +253,8 @@ function pickEditableSiteUpdates(body) {
 
     if (column === 'sort_order') {
       updates[column] = normalizeSortOrder(body[column]);
+    } else if (column === 'mode') {
+      updates[column] = normalizeMode(body[column]);
     } else if (column === 'name' || column === 'url') {
       updates[column] = normalizeRequiredText(body[column]);
     } else {
@@ -340,7 +345,26 @@ async function getAdById(id) {
   return rows[0] || null;
 }
 
+async function ensureColumn(tableName, columnName, definition, afterColumn) {
+  const [rows] = await db.execute(
+    `SELECT COUNT(*) AS count
+     FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = ?
+       AND COLUMN_NAME = ?`,
+    [tableName, columnName]
+  );
+
+  if (Number(rows[0]?.count) > 0) return;
+
+  const afterClause = afterColumn ? ` AFTER ${afterColumn}` : '';
+  await db.execute(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}${afterClause}`);
+}
+
 async function initializeDatabase() {
+  await ensureColumn('sites', 'mode', "VARCHAR(50) NOT NULL DEFAULT 'normal'", 'id');
+  await db.execute("UPDATE sites SET mode = 'normal' WHERE mode IS NULL OR mode = ''");
+
   await db.execute(`
     CREATE TABLE IF NOT EXISTS categories (
       id INT AUTO_INCREMENT PRIMARY KEY,
@@ -376,7 +400,7 @@ async function initializeDatabase() {
 
   await db.execute(`
     INSERT IGNORE INTO categories (name, mode, sort_order)
-    SELECT DISTINCT category, 'normal', 0
+    SELECT DISTINCT category, mode, 0
     FROM sites
     WHERE category IS NOT NULL AND category <> ''
   `);
@@ -387,8 +411,16 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/sites', asyncRoute(async (req, res) => {
+  const values = [];
+  let where = '';
+  if (req.query.mode) {
+    where = 'WHERE mode = ?';
+    values.push(normalizeMode(req.query.mode));
+  }
+
   const [rows] = await db.execute(
-    `SELECT ${siteColumns.join(', ')} FROM sites ORDER BY sort_order ASC, id ASC`
+    `SELECT ${siteColumns.join(', ')} FROM sites ${where} ORDER BY sort_order ASC, id ASC`,
+    values
   );
   res.json({ ok: true, data: rows });
 }));
@@ -429,6 +461,43 @@ app.post('/api/categories', asyncRoute(async (req, res) => {
   }
 }));
 
+app.patch('/api/categories/reorder', asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.body?.mode);
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+
+  if (items.length === 0) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'items are required.');
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    for (const item of items) {
+      const id = parseId(item?.id);
+      if (!id) {
+        await connection.rollback();
+        return jsonError(res, 400, 'INVALID_ID', 'Each item requires a valid numeric id.');
+      }
+      await connection.execute(
+        'UPDATE categories SET sort_order = ? WHERE id = ? AND mode = ?',
+        [normalizeSortOrder(item.sort_order), id, mode]
+      );
+    }
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+
+  const [rows] = await db.execute(
+    `SELECT ${categoryColumns.join(', ')} FROM categories WHERE mode = ? ORDER BY sort_order ASC, id ASC`,
+    [mode]
+  );
+  return res.json({ ok: true, data: rows });
+}));
+
 app.put('/api/categories/:id', asyncRoute(async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
@@ -463,8 +532,12 @@ app.put('/api/categories/:id', asyncRoute(async (req, res) => {
     const values = entries.map(([, value]) => value);
     values.push(id);
     const [result] = await db.execute(`UPDATE categories SET ${setClause} WHERE id = ?`, values);
-    if (Object.prototype.hasOwnProperty.call(updates, 'name') && existing.mode === 'normal') {
-      await db.execute('UPDATE sites SET category = ? WHERE category = ?', [updates.name, existing.name]);
+    if (Object.prototype.hasOwnProperty.call(updates, 'name')) {
+      await db.execute('UPDATE sites SET category = ? WHERE category = ? AND mode = ?', [
+        updates.name,
+        existing.name,
+        existing.mode,
+      ]);
     }
 
     const updated = await getCategoryById(id);
@@ -491,9 +564,10 @@ app.delete('/api/categories/:id', asyncRoute(async (req, res) => {
     return jsonError(res, 404, 'NOT_FOUND', 'Category not found.');
   }
 
-  if (existing.mode === 'normal') {
-    await db.execute('UPDATE sites SET category = NULL WHERE category = ?', [existing.name]);
-  }
+  await db.execute('UPDATE sites SET category = NULL WHERE category = ? AND mode = ?', [
+    existing.name,
+    existing.mode,
+  ]);
 
   return res.json({ ok: true, data: { id } });
 }));
@@ -717,9 +791,10 @@ app.post('/api/sites', asyncRoute(async (req, res) => {
   }
 
   const [result] = await db.execute(
-    `INSERT INTO sites (name, url, category, description, logo, status, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO sites (mode, name, url, category, description, logo, status, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
+      site.mode,
       site.name,
       site.url,
       site.category,

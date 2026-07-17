@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import {
   Check,
   CheckCircle,
@@ -38,17 +38,25 @@ export default function SiteManager() {
     updateSiteLogoInMode,
     updateSiteUrlInMode,
     updateSiteNameInMode,
+    updateSiteCategoryInMode,
   } = useData();
 
   const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('standard');
   const { categories } = getModeData(activeMode);
-  const allSites: (Site & { categoryId: string; categoryName: string })[] = categories.flatMap((category) =>
-    (Array.isArray(category.sites) ? category.sites : []).map((site) => ({
-      ...site,
-      categoryId: category.id,
-      categoryName: category.name,
-    }))
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const allSites: (Site & { categoryId: string; categoryName: string })[] = useMemo(
+    () => categories.flatMap((category) =>
+      (Array.isArray(category.sites) ? category.sites : []).map((site) => ({
+        ...site,
+        categoryId: category.id,
+        categoryName: category.name,
+      }))
+    ),
+    [categories]
   );
+  const filteredSites = categoryFilter === 'all'
+    ? allSites
+    : allSites.filter((site) => site.categoryName === categoryFilter || site.categoryId === categoryFilter);
 
   const [form, setForm] = useState({
     name: '',
@@ -77,10 +85,7 @@ export default function SiteManager() {
     const body = await res.json().catch(() => null);
 
     if (!res.ok || !body?.ok || typeof body.data?.url !== 'string') {
-      console.error('로고 업로드 응답 오류', {
-        status: res.status,
-        body,
-      });
+      console.error('로고 업로드 응답 오류', { status: res.status, body });
       throw new Error(body?.message || body?.error || '로고 업로드에 실패했습니다.');
     }
 
@@ -90,12 +95,7 @@ export default function SiteManager() {
   const uploadLogoFile = async (file: File) => {
     const body = new FormData();
     body.append('logo', file);
-
-    const res = await fetch('/api/uploads/logo', {
-      method: 'POST',
-      body,
-    });
-
+    const res = await fetch('/api/uploads/logo', { method: 'POST', body });
     return parseUploadResponse(res);
   };
 
@@ -105,7 +105,6 @@ export default function SiteManager() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
     });
-
     return parseUploadResponse(res);
   };
 
@@ -148,7 +147,6 @@ export default function SiteManager() {
   const toggleStatus = async (id: number) => {
     const site = allSites.find((item) => item.id === id);
     if (!site) return;
-
     try {
       await updateSiteStatusInMode(activeMode, id, nextStatus(site.status));
     } catch (err) {
@@ -166,11 +164,10 @@ export default function SiteManager() {
 
   const add = async () => {
     if (!form.name.trim() || !form.url.trim() || !form.categoryId) return;
-
     try {
       await addSiteInMode(activeMode, form.categoryId, {
-        name: form.name,
-        url: form.url,
+        name: form.name.trim(),
+        url: form.url.trim(),
         logo: form.logo,
         status: 'normal',
         description: form.description,
@@ -183,7 +180,6 @@ export default function SiteManager() {
 
   const downloadLogo = async () => {
     if (!logoUrl.trim() || logoModal === null) return;
-
     setLogoUploading(true);
     try {
       const logoPath = await downloadLogoFromUrl(logoUrl.trim());
@@ -202,11 +198,6 @@ export default function SiteManager() {
     if (file) await saveUploadedLogo(siteId, file);
   };
 
-  const startEditUrl = (id: number, url: string) => {
-    setEditingUrlId(id);
-    setEditingUrlValue(url);
-  };
-
   const saveUrl = async () => {
     if (editingUrlId !== null) {
       try {
@@ -218,11 +209,6 @@ export default function SiteManager() {
     }
     setEditingUrlId(null);
     setEditingUrlValue('');
-  };
-
-  const startEditName = (id: number, name: string) => {
-    setEditingNameId(id);
-    setEditingNameValue(name);
   };
 
   const saveName = async () => {
@@ -238,11 +224,22 @@ export default function SiteManager() {
     setEditingNameValue('');
   };
 
+  const updateCategory = async (siteId: number, categoryName: string) => {
+    try {
+      await updateSiteCategoryInMode(activeMode, siteId, categoryName);
+    } catch (err) {
+      showError('사이트 카테고리 수정에 실패했습니다.', err);
+    }
+  };
+
   const activeLogoSite = allSites.find((site) => site.id === logoModal);
 
   return (
     <div className="space-y-5">
-      <ModeSubTabs activeMode={activeMode} onModeChange={setActiveMode} />
+      <ModeSubTabs activeMode={activeMode} onModeChange={(mode) => {
+        setActiveMode(mode);
+        setCategoryFilter('all');
+      }} />
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-4 bg-obsidian-600 rounded-xl border border-obsidian-500">
         <input
@@ -264,9 +261,7 @@ export default function SiteManager() {
         >
           <option value="">카테고리 선택</option>
           {categories.map((category) => (
-            <option key={category.id} value={category.id}>
-              {category.name}
-            </option>
+            <option key={category.id} value={category.id}>{category.name}</option>
           ))}
         </select>
         <input
@@ -306,6 +301,20 @@ export default function SiteManager() {
         </button>
       </div>
 
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-slate-500">카테고리 필터</span>
+        <select
+          value={categoryFilter}
+          onChange={(e) => setCategoryFilter(e.target.value)}
+          className="px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
+        >
+          <option value="all">전체 보기</option>
+          {categories.map((category) => (
+            <option key={category.id} value={category.name}>{category.name}</option>
+          ))}
+        </select>
+      </div>
+
       <div className="overflow-x-auto rounded-xl border border-obsidian-500">
         <table className="w-full text-sm">
           <thead>
@@ -318,126 +327,148 @@ export default function SiteManager() {
             </tr>
           </thead>
           <tbody>
-            {allSites.map((site) => (
-              <tr key={site.id} className="border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors">
-                <td className="px-3 py-2.5">
-                  <div className="w-8 h-8 rounded bg-white/90 border border-obsidian-500 flex items-center justify-center overflow-hidden p-1">
-                    {site.logo ? (
-                      <img
-                        src={site.logo}
-                        alt=""
-                        className="w-full h-full object-contain"
-                        onError={(e) => {
-                          const img = e.target as HTMLImageElement;
-                          img.style.display = 'none';
-                          if (img.parentElement) {
-                            img.parentElement.innerHTML = `<span class="text-[10px] font-bold text-neon-orange">${site.name[0] || '?'}</span>`;
-                          }
-                        }}
-                      />
+            {filteredSites.map((site) => {
+              const categoryOptions = categories.some((category) => category.name === site.categoryName)
+                ? categories
+                : [...categories, { id: site.categoryName, name: site.categoryName, icon: 'FolderOpen', color: 'blue', sites: [] }];
+
+              return (
+                <tr key={site.id} className="border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors">
+                  <td className="px-3 py-2.5">
+                    <div className="w-8 h-8 rounded bg-white/90 border border-obsidian-500 flex items-center justify-center overflow-hidden p-1">
+                      {site.logo ? (
+                        <img
+                          src={site.logo}
+                          alt=""
+                          className="w-full h-full object-contain"
+                          onError={(e) => {
+                            const img = e.target as HTMLImageElement;
+                            img.style.display = 'none';
+                            if (img.parentElement) {
+                              img.parentElement.innerHTML = `<span class="text-[10px] font-bold text-neon-orange">${site.name[0] || '?'}</span>`;
+                            }
+                          }}
+                        />
+                      ) : (
+                        <span className="text-[10px] font-bold text-neon-orange">{site.name[0] || '?'}</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {editingNameId === site.id ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          value={editingNameValue}
+                          onChange={(e) => setEditingNameValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void saveName();
+                          }}
+                          autoFocus
+                          className="w-28 px-2 py-1 text-xs bg-obsidian-700 border border-neon-orange/50 rounded text-white focus:outline-none"
+                        />
+                        <button onClick={() => void saveName()} className="text-emerald-400 hover:text-emerald-300">
+                          <Check size={12} />
+                        </button>
+                      </div>
                     ) : (
-                      <span className="text-[10px] font-bold text-neon-orange">{site.name[0] || '?'}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-slate-200 font-medium whitespace-nowrap">{site.name}</span>
+                        <button
+                          onClick={() => {
+                            setEditingNameId(site.id);
+                            setEditingNameValue(site.name);
+                          }}
+                          className="text-slate-600 hover:text-neon-orange transition-colors opacity-0 hover:opacity-100"
+                        >
+                          <Edit3 size={11} />
+                        </button>
+                      </div>
                     )}
-                  </div>
-                </td>
-                <td className="px-3 py-2.5">
-                  {editingNameId === site.id ? (
-                    <div className="flex items-center gap-1">
-                      <input
-                        value={editingNameValue}
-                        onChange={(e) => setEditingNameValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void saveName();
-                        }}
-                        autoFocus
-                        className="w-28 px-2 py-1 text-xs bg-obsidian-700 border border-neon-orange/50 rounded text-white focus:outline-none"
-                      />
-                      <button onClick={() => void saveName()} className="text-emerald-400 hover:text-emerald-300">
-                        <Check size={12} />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-slate-200 font-medium whitespace-nowrap">{site.name}</span>
-                      <button
-                        onClick={() => startEditName(site.id, site.name)}
-                        className="text-slate-600 hover:text-neon-orange transition-colors opacity-0 hover:opacity-100"
-                      >
-                        <Edit3 size={11} />
-                      </button>
-                    </div>
-                  )}
-                </td>
-                <td className="px-3 py-2.5 text-slate-500 text-xs whitespace-nowrap">{site.categoryName}</td>
-                <td className="px-3 py-2.5 max-w-[200px]">
-                  {editingUrlId === site.id ? (
-                    <div className="flex items-center gap-1">
-                      <input
-                        value={editingUrlValue}
-                        onChange={(e) => setEditingUrlValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void saveUrl();
-                        }}
-                        autoFocus
-                        className="w-full min-w-[140px] px-2 py-1 text-xs bg-obsidian-700 border border-neon-orange/50 rounded text-white focus:outline-none font-mono"
-                      />
-                      <button onClick={() => void saveUrl()} className="text-emerald-400 hover:text-emerald-300 flex-shrink-0">
-                        <Check size={12} />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-1 group/url">
-                      <a
-                        href={site.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-neon-orange/70 hover:text-neon-orange text-xs truncate flex items-center gap-1"
-                      >
-                        <ExternalLink size={10} className="flex-shrink-0" />
-                        <span className="truncate">{site.url}</span>
-                      </a>
-                      <button
-                        onClick={() => startEditUrl(site.id, site.url)}
-                        className="text-slate-600 hover:text-neon-orange transition-colors flex-shrink-0 opacity-0 group-hover/url:opacity-100"
-                      >
-                        <Edit3 size={11} />
-                      </button>
-                    </div>
-                  )}
-                </td>
-                <td className="px-3 py-2.5">
-                  <button
-                    onClick={() => void toggleStatus(site.id)}
-                    className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${
-                      site.status === 'normal'
-                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                        : site.status === 'busy'
-                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                          : 'bg-red-500/10 text-red-400 border-red-500/30'
-                    }`}
-                  >
-                    {statusOptions.find((option) => option.value === site.status)?.label}
-                  </button>
-                </td>
-                <td className="px-3 py-2.5">
-                  <button
-                    onClick={() => {
-                      setLogoModal(site.id);
-                      setLogoUrl('');
-                      setLogoDownloaded(false);
-                    }}
-                    className="text-xs text-neon-orange/70 hover:text-neon-orange font-medium transition-colors whitespace-nowrap"
-                  >
-                    변경
-                  </button>
-                </td>
-                <td className="px-3 py-2.5">
-                  <button onClick={() => void remove(site.id)} className="text-slate-600 hover:text-red-400 transition-colors">
-                    <Trash2 size={14} />
-                  </button>
-                </td>
-              </tr>
-            ))}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <select
+                      value={site.categoryName}
+                      onChange={(e) => void updateCategory(site.id, e.target.value)}
+                      className="min-w-28 px-2 py-1 text-xs bg-obsidian-700 border border-obsidian-500 rounded text-slate-200 focus:outline-none focus:border-neon-orange"
+                    >
+                      {categoryOptions.map((category) => (
+                        <option key={category.id} value={category.name}>{category.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-3 py-2.5 max-w-[200px]">
+                    {editingUrlId === site.id ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          value={editingUrlValue}
+                          onChange={(e) => setEditingUrlValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') void saveUrl();
+                          }}
+                          autoFocus
+                          className="w-full min-w-[140px] px-2 py-1 text-xs bg-obsidian-700 border border-neon-orange/50 rounded text-white focus:outline-none font-mono"
+                        />
+                        <button onClick={() => void saveUrl()} className="text-emerald-400 hover:text-emerald-300 flex-shrink-0">
+                          <Check size={12} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 group/url">
+                        <a
+                          href={site.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-neon-orange/70 hover:text-neon-orange text-xs truncate flex items-center gap-1"
+                        >
+                          <ExternalLink size={10} className="flex-shrink-0" />
+                          <span className="truncate">{site.url}</span>
+                        </a>
+                        <button
+                          onClick={() => {
+                            setEditingUrlId(site.id);
+                            setEditingUrlValue(site.url);
+                          }}
+                          className="text-slate-600 hover:text-neon-orange transition-colors flex-shrink-0 opacity-0 group-hover/url:opacity-100"
+                        >
+                          <Edit3 size={11} />
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button
+                      onClick={() => void toggleStatus(site.id)}
+                      className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${
+                        site.status === 'normal'
+                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                          : site.status === 'busy'
+                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                            : 'bg-red-500/10 text-red-400 border-red-500/30'
+                      }`}
+                    >
+                      {statusOptions.find((option) => option.value === site.status)?.label}
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button
+                      onClick={() => {
+                        setLogoModal(site.id);
+                        setLogoUrl('');
+                        setLogoDownloaded(false);
+                      }}
+                      className="text-xs text-neon-orange/70 hover:text-neon-orange font-medium transition-colors whitespace-nowrap"
+                    >
+                      변경
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button onClick={() => void remove(site.id)} className="text-slate-600 hover:text-red-400 transition-colors">
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

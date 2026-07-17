@@ -1,21 +1,22 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
+import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
-  Category,
-  Site,
   Ad,
+  Category,
+  DbMode,
   InterAd,
-  standardCategories,
-  secureCategories,
-  standardAds,
+  Site,
   secureAds,
-  standardInterAds,
+  secureCategories,
   secureInterAds,
+  standardAds,
+  standardCategories,
+  standardInterAds,
 } from '../data/categories';
 import { useTheme } from './ThemeContext';
 
 export type MobileColumns = 1 | 2;
 type Mode = 'standard' | 'secure';
-type SiteUpdatePayload = Partial<Omit<Site, 'id'>>;
+type SiteUpdatePayload = Partial<Omit<Site, 'id'>> & { category?: string; sort_order?: number };
 
 interface DataContextType {
   categories: Category[];
@@ -45,11 +46,13 @@ interface DataContextType {
   updateSiteStatusInMode: (mode: Mode, siteId: number, status: Site['status']) => Promise<void>;
   updateSiteUrlInMode: (mode: Mode, siteId: number, url: string) => Promise<void>;
   updateSiteNameInMode: (mode: Mode, siteId: number, name: string) => Promise<void>;
+  updateSiteCategoryInMode: (mode: Mode, siteId: number, categoryName: string) => Promise<void>;
   addSiteInMode: (mode: Mode, categoryId: string, site: Omit<Site, 'id'>) => Promise<void>;
   removeSiteInMode: (mode: Mode, siteId: number) => Promise<void>;
   addCategoryInMode: (mode: Mode, cat: Omit<Category, 'sites'>) => Promise<void>;
   removeCategoryInMode: (mode: Mode, categoryId: string) => Promise<void>;
   updateCategoryNameInMode: (mode: Mode, categoryId: string, name: string) => Promise<void>;
+  reorderCategoriesInMode: (mode: Mode, categoryIds: string[]) => Promise<void>;
   updateAdInMode: (mode: Mode, adId: number, updates: Partial<Ad>) => Promise<void>;
   addAdInMode: (mode: Mode, ad: Omit<Ad, 'id'>) => Promise<void>;
   removeAdInMode: (mode: Mode, adId: number) => Promise<void>;
@@ -67,7 +70,6 @@ interface DataContextType {
 }
 
 const DataContext = createContext<DataContextType | null>(null);
-
 type ApiRow = Record<string, unknown>;
 
 const isRecord = (value: unknown): value is ApiRow =>
@@ -76,11 +78,18 @@ const isRecord = (value: unknown): value is ApiRow =>
 const toStringValue = (value: unknown, fallback = '') =>
   typeof value === 'string' && value.trim() ? value.trim() : fallback;
 
+const apiMode = (mode: Mode): DbMode => (mode === 'secure' ? 'secure' : 'normal');
+const modeKey = (dbMode: unknown): Mode => (dbMode === 'secure' ? 'secure' : 'standard');
+
 const isSiteStatus = (value: unknown): value is Site['status'] =>
   value === 'normal' || value === 'busy' || value === 'slow';
 
-const apiMode = (mode: Mode) => (mode === 'standard' ? 'normal' : 'secure');
-const uiMode = (mode: unknown): Mode => (mode === 'secure' ? 'secure' : 'standard');
+const modeLabelColor = (mode: Mode) => (mode === 'secure' ? 'orange' : 'blue');
+
+const extractRows = (payload: unknown): ApiRow[] =>
+  isRecord(payload) && Array.isArray(payload.data) && payload.data.every(isRecord)
+    ? payload.data
+    : [];
 
 const isExpired = (date?: string) => {
   if (!date) return false;
@@ -88,99 +97,53 @@ const isExpired = (date?: string) => {
   return Number.isFinite(expiry.getTime()) && expiry.getTime() < Date.now();
 };
 
-const sanitizeCategories = (items: unknown): Category[] | null => {
-  if (!Array.isArray(items) || !items.every(isRecord)) return null;
-  if (!items.every((cat) => Array.isArray(cat.sites))) return null;
-
-  return items.map((cat, index) => ({
-    id: toStringValue(cat.id, `category-${index + 1}`),
-    name: toStringValue(cat.name, `카테고리 ${index + 1}`),
-    icon: toStringValue(cat.icon, 'FolderOpen'),
-    color: toStringValue(cat.color, 'blue'),
-    sites: Array.isArray(cat.sites)
-      ? cat.sites.filter(isRecord).map((site, siteIndex) => ({
-          id: Number(site.id) || Date.now() + index * 1000 + siteIndex,
-          name: toStringValue(site.name, 'Untitled Site'),
-          url: toStringValue(site.url, '#'),
-          logo: toStringValue(site.logo, '/uploads/logos/default.png'),
-          status: isSiteStatus(site.status) ? site.status : 'normal',
-          description: toStringValue(site.description),
-        }))
-      : [],
-  }));
+export const isVisibleAd = (ad: Ad | InterAd) => {
+  const active = 'isActive' in ad ? ad.isActive !== false : true;
+  return active && !isExpired('expiresAt' in ad ? ad.expiresAt : undefined);
 };
 
-const extractDataArray = (payload: unknown): ApiRow[] | null => {
-  const data = isRecord(payload) && Array.isArray(payload.data) ? payload.data : payload;
-  return Array.isArray(data) && data.every(isRecord) ? data : null;
+const apiRequest = async (path: string, init?: RequestInit) => {
+  const res = await fetch(path, {
+    ...init,
+    headers: {
+      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...init?.headers,
+    },
+  });
+  const payload = await res.json().catch(() => null);
+
+  if (!res.ok || !isRecord(payload) || payload.ok !== true) {
+    console.error('API request failed', { path, status: res.status, body: payload });
+    const message =
+      isRecord(payload) && typeof payload.message === 'string'
+        ? payload.message
+        : isRecord(payload) && typeof payload.error === 'string'
+          ? payload.error
+          : `API request failed with ${res.status}`;
+    throw new Error(message);
+  }
+
+  return payload;
 };
 
-const mapSiteRow = (row: ApiRow, index: number): Site => ({
-  id: Number(row.id ?? row.site_id ?? row.siteId) || Date.now() + index,
-  name: toStringValue(row.name ?? row.site_name ?? row.siteName, 'Untitled Site'),
+const mapCategory = (row: ApiRow, fallbackIndex: number): Category => ({
+  id: String(Number(row.id) || toStringValue(row.id, `category-${fallbackIndex + 1}`)),
+  name: toStringValue(row.name, `카테고리 ${fallbackIndex + 1}`),
+  icon: 'FolderOpen',
+  color: modeLabelColor(modeKey(row.mode)),
+  sortOrder: Number(row.sort_order ?? row.sortOrder) || 0,
+  sites: [],
+});
+
+const mapSite = (row: ApiRow, fallbackIndex: number): Site => ({
+  id: Number(row.id) || fallbackIndex + 1,
+  mode: apiMode(modeKey(row.mode)),
+  name: toStringValue(row.name, 'Untitled Site'),
   url: toStringValue(row.url, '#'),
-  logo: toStringValue(row.logo ?? row.logo_path ?? row.logoPath, '/uploads/logos/default.png'),
+  logo: toStringValue(row.logo, '/uploads/logos/default.png'),
   status: isSiteStatus(row.status) ? row.status : 'normal',
   description: toStringValue(row.description),
 });
-
-const mapCategoryRows = (rows: ApiRow[]) => {
-  const result: Record<Mode, Category[]> = { standard: [], secure: [] };
-
-  rows.forEach((row, index) => {
-    const mode = uiMode(row.mode);
-    result[mode].push({
-      id: String(Number(row.id) || toStringValue(row.id, `category-${index + 1}`)),
-      name: toStringValue(row.name, `카테고리 ${index + 1}`),
-      icon: 'FolderOpen',
-      color: mode === 'secure' ? 'orange' : 'blue',
-      sites: [],
-    });
-  });
-
-  return result;
-};
-
-const composeCategories = (categoryRows: ApiRow[] | null, siteRows: ApiRow[] | null) => {
-  const categoryMap = mapCategoryRows(categoryRows ?? []);
-  const standard = categoryMap.standard;
-  const secure = categoryMap.secure;
-
-  const standardByName = new Map(standard.map((category) => [category.name, category]));
-
-  (siteRows ?? []).forEach((row, index) => {
-    const categoryName = toStringValue(
-      row.category_name ?? row.categoryName ?? row.category,
-      '미분류'
-    );
-    let category = standardByName.get(categoryName);
-
-    if (!category) {
-      category = {
-        id: categoryName,
-        name: categoryName,
-        icon: 'FolderOpen',
-        color: 'blue',
-        sites: [],
-      };
-      standardByName.set(categoryName, category);
-      standard.push(category);
-    }
-
-    category.sites.push(mapSiteRow(row, index));
-  });
-
-  return {
-    standard:
-      standard.length > 0
-        ? standard
-        : sanitizeCategories(standardCategories) ?? standardCategories,
-    secure:
-      secure.length > 0
-        ? secure
-        : sanitizeCategories(secureCategories) ?? secureCategories,
-  };
-};
 
 const mapAd = (row: ApiRow): Ad => ({
   id: Number(row.id),
@@ -217,62 +180,35 @@ const mapInterAd = (row: ApiRow): InterAd => ({
   sortOrder: Number(row.sort_order ?? row.sortOrder) || 0,
 });
 
-const mapAds = (rows: ApiRow[] | null) => {
-  const result = {
-    standardAds: [] as Ad[],
-    secureAds: [] as Ad[],
-    standardInterAds: [] as InterAd[],
-    secureInterAds: [] as InterAd[],
-  };
+const buildCategories = (categories: Category[], siteRows: ApiRow[]) => {
+  const byName = new Map(categories.map((category) => [category.name, category]));
+  const next = categories.map((category) => ({ ...category, sites: [] as Site[] }));
+  next.forEach((category) => byName.set(category.name, category));
 
-  (rows ?? []).forEach((row) => {
-    const mode = uiMode(row.mode);
-    const placement = toStringValue(row.placement, 'top');
+  siteRows.forEach((row, index) => {
+    const categoryName = toStringValue(row.category, '미분류');
+    let category = byName.get(categoryName);
 
-    if (placement === 'infeed') {
-      result[mode === 'secure' ? 'secureInterAds' : 'standardInterAds'].push(mapInterAd(row));
-    } else {
-      result[mode === 'secure' ? 'secureAds' : 'standardAds'].push(mapAd(row));
+    if (!category) {
+      category = {
+        id: categoryName,
+        name: categoryName,
+        icon: 'FolderOpen',
+        color: 'blue',
+        sortOrder: next.length,
+        sites: [],
+      };
+      next.push(category);
+      byName.set(categoryName, category);
     }
+
+    category.sites.push(mapSite(row, index));
   });
 
-  return {
-    standardAds: result.standardAds,
-    secureAds: result.secureAds,
-    standardInterAds: result.standardInterAds,
-    secureInterAds: result.secureInterAds,
-  };
+  return next.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name));
 };
 
-const apiRequest = async (requestPath: string, init?: RequestInit) => {
-  const res = await fetch(requestPath, {
-    ...init,
-    headers: {
-      ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-      ...init?.headers,
-    },
-  });
-  const payload = await res.json().catch(() => null);
-
-  if (!res.ok || !isRecord(payload) || payload.ok !== true) {
-    console.error('API 요청 실패', {
-      path: requestPath,
-      status: res.status,
-      body: payload,
-    });
-    const message =
-      isRecord(payload) && typeof payload.message === 'string'
-        ? payload.message
-        : isRecord(payload) && typeof payload.error === 'string'
-          ? payload.error
-          : `API request failed with ${res.status}`;
-    throw new Error(message);
-  }
-
-  return payload;
-};
-
-const topAdPayload = (mode: Mode, ad: Partial<Ad>) => ({
+const adPayload = (mode: Mode, ad: Partial<Ad>) => ({
   mode: apiMode(mode),
   placement: ad.placement || 'top',
   title: ad.title,
@@ -302,15 +238,10 @@ const interAdPayload = (mode: Mode, ad: Partial<InterAd>) => ({
   position_after: ad.targetCategoryIndex ?? 0,
 });
 
-export const isVisibleAd = (ad: Ad | InterAd) => {
-  const active = 'isActive' in ad ? ad.isActive !== false : true;
-  return active && !isExpired('expiresAt' in ad ? ad.expiresAt : undefined);
-};
-
 export function DataProvider({ children }: { children: ReactNode }) {
   const { mode } = useTheme();
-  const [stdCats, setStdCats] = useState<Category[]>(() => sanitizeCategories(standardCategories) ?? standardCategories);
-  const [secCats, setSecCats] = useState<Category[]>(() => sanitizeCategories(secureCategories) ?? secureCategories);
+  const [stdCats, setStdCats] = useState<Category[]>(standardCategories);
+  const [secCats, setSecCats] = useState<Category[]>(secureCategories);
   const [stdAds, setStdAds] = useState<Ad[]>(standardAds);
   const [secAds, setSecAds] = useState<Ad[]>(secureAds);
   const [stdInterAds, setStdInterAds] = useState<InterAd[]>(standardInterAds);
@@ -319,56 +250,101 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [telegramLink, setTelegramLinkState] = useState('https://t.me/junchae_admin');
   const [telegramVisible, setTelegramVisibleState] = useState(true);
 
-  const reloadCatalog = useCallback(async () => {
-    const [categoryPayload, sitePayload] = await Promise.all([
-      apiRequest('/api/categories').catch((err) => {
-        console.error('카테고리 API 로드 실패', err);
-        return null;
-      }),
-      apiRequest('/api/sites').catch((err) => {
-        console.error('사이트 API 로드 실패', err);
-        return null;
-      }),
-    ]);
+  const seedModeIfEmpty = useCallback(async (m: Mode, categoryRows: ApiRow[], siteRows: ApiRow[]) => {
+    if (categoryRows.length > 0) return false;
+    const fallback = m === 'secure' ? secureCategories : standardCategories;
+    const seedCategories =
+      siteRows.length > 0
+        ? Array.from(new Set(siteRows.map((row) => toStringValue(row.category, '미분류')))).map((name, index) => ({
+            id: name,
+            name,
+            icon: 'FolderOpen',
+            color: modeLabelColor(m),
+            sortOrder: index,
+            sites: [] as Site[],
+          }))
+        : fallback;
 
-    const next = composeCategories(
-      categoryPayload ? extractDataArray(categoryPayload) : null,
-      sitePayload ? extractDataArray(sitePayload) : null
-    );
+    for (const [index, category] of seedCategories.entries()) {
+      await apiRequest('/api/categories', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: category.name,
+          mode: apiMode(m),
+          sort_order: index,
+        }),
+      }).catch((err) => {
+        console.error('Failed to seed category', err);
+      });
 
-    setStdCats(next.standard);
-    setSecCats(next.secure);
+      if (siteRows.length === 0 && 'sites' in category) {
+        for (const [siteIndex, site] of category.sites.entries()) {
+          await apiRequest('/api/sites', {
+            method: 'POST',
+            body: JSON.stringify({
+              mode: apiMode(m),
+              name: site.name,
+              url: site.url,
+              category: category.name,
+              description: site.description,
+              logo: site.logo,
+              status: site.status,
+              sort_order: siteIndex,
+            }),
+          }).catch((err) => {
+            console.error('Failed to seed site', err);
+          });
+        }
+      }
+    }
+
+    return true;
   }, []);
+
+  const loadModeCatalog = useCallback(async (m: Mode) => {
+    const dbMode = apiMode(m);
+    let categoryRows = extractRows(await apiRequest(`/api/categories?mode=${dbMode}`));
+    let siteRows = extractRows(await apiRequest(`/api/sites?mode=${dbMode}`));
+
+    if (await seedModeIfEmpty(m, categoryRows, siteRows)) {
+      categoryRows = extractRows(await apiRequest(`/api/categories?mode=${dbMode}`));
+      siteRows = extractRows(await apiRequest(`/api/sites?mode=${dbMode}`));
+    }
+
+    const categories = categoryRows
+      .map(mapCategory)
+      .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || Number(a.id) - Number(b.id));
+
+    return buildCategories(categories, siteRows);
+  }, [seedModeIfEmpty]);
+
+  const reloadCatalog = useCallback(async () => {
+    const [standard, secure] = await Promise.all([
+      loadModeCatalog('standard'),
+      loadModeCatalog('secure'),
+    ]);
+    setStdCats(standard);
+    setSecCats(secure);
+  }, [loadModeCatalog]);
 
   const reloadAds = useCallback(async () => {
-    const payload = await apiRequest('/api/ads');
-    const next = mapAds(extractDataArray(payload));
-    setStdAds(next.standardAds);
-    setSecAds(next.secureAds);
-    setStdInterAds(next.standardInterAds);
-    setSecInterAds(next.secureInterAds);
+    const [normalRows, secureRows] = await Promise.all([
+      apiRequest('/api/ads?mode=normal').then(extractRows),
+      apiRequest('/api/ads?mode=secure').then(extractRows),
+    ]);
+
+    setStdAds(normalRows.filter((row) => toStringValue(row.placement, 'top') !== 'infeed').map(mapAd));
+    setSecAds(secureRows.filter((row) => toStringValue(row.placement, 'top') !== 'infeed').map(mapAd));
+    setStdInterAds(normalRows.filter((row) => toStringValue(row.placement, 'top') === 'infeed').map(mapInterAd));
+    setSecInterAds(secureRows.filter((row) => toStringValue(row.placement, 'top') === 'infeed').map(mapInterAd));
   }, []);
 
-  const reloadAll = useCallback(async () => {
-    await Promise.all([
-      reloadCatalog(),
-      reloadAds().catch((err) => {
-        console.error('광고 API 로드 실패. 정적 광고 데이터를 사용합니다.', err);
-        setStdAds(standardAds);
-        setSecAds(secureAds);
-        setStdInterAds(standardInterAds);
-        setSecInterAds(secureInterAds);
-      }),
-    ]);
-  }, [reloadAds, reloadCatalog]);
-
   useEffect(() => {
-    reloadAll().catch((err) => {
-      console.error('초기 데이터 로드 실패. 정적 데이터를 사용합니다.', err);
-      setStdCats(sanitizeCategories(standardCategories) ?? standardCategories);
-      setSecCats(sanitizeCategories(secureCategories) ?? secureCategories);
-    });
-  }, [reloadAll]);
+    Promise.all([
+      reloadCatalog().catch((err) => console.error('Failed to load catalog data', err)),
+      reloadAds().catch((err) => console.error('Failed to load ad data', err)),
+    ]).catch((err) => console.error('Failed to load data', err));
+  }, [reloadAds, reloadCatalog]);
 
   useEffect(() => {
     try {
@@ -381,10 +357,149 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const isStandard = mode === 'standard';
-  const categories = isStandard ? stdCats : secCats;
-  const ads = isStandard ? stdAds : secAds;
-  const interAds = isStandard ? stdInterAds : secInterAds;
+  const categories = mode === 'secure' ? secCats : stdCats;
+  const ads = mode === 'secure' ? secAds : stdAds;
+  const interAds = mode === 'secure' ? secInterAds : stdInterAds;
+
+  const categoryNameById = useCallback((m: Mode, categoryId: string) => {
+    const source = m === 'secure' ? secCats : stdCats;
+    return source.find((category) => category.id === categoryId)?.name || categoryId;
+  }, [secCats, stdCats]);
+
+  const updateSiteInMode = useCallback(async (m: Mode, siteId: number, updates: SiteUpdatePayload) => {
+    await apiRequest(`/api/sites/${siteId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ...updates, mode: apiMode(m) }),
+    });
+    await reloadCatalog();
+  }, [reloadCatalog]);
+
+  const updateSiteLogoInMode = useCallback((m: Mode, siteId: number, logoPath: string) =>
+    updateSiteInMode(m, siteId, { logo: logoPath }), [updateSiteInMode]);
+
+  const updateSiteStatusInMode = useCallback(async (_m: Mode, siteId: number, status: Site['status']) => {
+    await apiRequest(`/api/sites/${siteId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+    await reloadCatalog();
+  }, [reloadCatalog]);
+
+  const updateSiteUrlInMode = useCallback((m: Mode, siteId: number, url: string) =>
+    updateSiteInMode(m, siteId, { url }), [updateSiteInMode]);
+
+  const updateSiteNameInMode = useCallback((m: Mode, siteId: number, name: string) =>
+    updateSiteInMode(m, siteId, { name }), [updateSiteInMode]);
+
+  const updateSiteCategoryInMode = useCallback((m: Mode, siteId: number, categoryName: string) =>
+    updateSiteInMode(m, siteId, { category: categoryName }), [updateSiteInMode]);
+
+  const addSiteInMode = useCallback(async (m: Mode, categoryId: string, site: Omit<Site, 'id'>) => {
+    await apiRequest('/api/sites', {
+      method: 'POST',
+      body: JSON.stringify({
+        mode: apiMode(m),
+        name: site.name,
+        url: site.url,
+        category: categoryNameById(m, categoryId),
+        description: site.description,
+        logo: site.logo,
+        status: site.status,
+        sort_order: 0,
+      }),
+    });
+    await reloadCatalog();
+  }, [categoryNameById, reloadCatalog]);
+
+  const removeSiteInMode = useCallback(async (_m: Mode, siteId: number) => {
+    await apiRequest(`/api/sites/${siteId}`, { method: 'DELETE' });
+    await reloadCatalog();
+  }, [reloadCatalog]);
+
+  const addCategoryInMode = useCallback(async (m: Mode, cat: Omit<Category, 'sites'>) => {
+    await apiRequest('/api/categories', {
+      method: 'POST',
+      body: JSON.stringify({
+        mode: apiMode(m),
+        name: cat.name,
+        sort_order: cat.sortOrder ?? 0,
+      }),
+    });
+    await reloadCatalog();
+  }, [reloadCatalog]);
+
+  const removeCategoryInMode = useCallback(async (_m: Mode, categoryId: string) => {
+    await apiRequest(`/api/categories/${categoryId}`, { method: 'DELETE' });
+    await reloadCatalog();
+  }, [reloadCatalog]);
+
+  const updateCategoryNameInMode = useCallback(async (m: Mode, categoryId: string, name: string) => {
+    await apiRequest(`/api/categories/${categoryId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ mode: apiMode(m), name }),
+    });
+    await reloadCatalog();
+  }, [reloadCatalog]);
+
+  const reorderCategoriesInMode = useCallback(async (m: Mode, categoryIds: string[]) => {
+    await apiRequest('/api/categories/reorder', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        mode: apiMode(m),
+        items: categoryIds.map((id, index) => ({ id, sort_order: index })),
+      }),
+    });
+    await reloadCatalog();
+  }, [reloadCatalog]);
+
+  const addAdInMode = useCallback(async (m: Mode, ad: Omit<Ad, 'id'>) => {
+    await apiRequest('/api/ads', {
+      method: 'POST',
+      body: JSON.stringify(adPayload(m, ad)),
+    });
+    await reloadAds();
+  }, [reloadAds]);
+
+  const updateAdInMode = useCallback(async (m: Mode, adId: number, updates: Partial<Ad>) => {
+    await apiRequest(`/api/ads/${adId}`, {
+      method: 'PUT',
+      body: JSON.stringify(adPayload(m, updates)),
+    });
+    await reloadAds();
+  }, [reloadAds]);
+
+  const removeAdInMode = useCallback(async (_m: Mode, adId: number) => {
+    await apiRequest(`/api/ads/${adId}`, { method: 'DELETE' });
+    await reloadAds();
+  }, [reloadAds]);
+
+  const addInterAdInMode = useCallback(async (m: Mode, ad: Omit<InterAd, 'id'>) => {
+    await apiRequest('/api/ads', {
+      method: 'POST',
+      body: JSON.stringify(interAdPayload(m, ad)),
+    });
+    await reloadAds();
+  }, [reloadAds]);
+
+  const updateInterAdInMode = useCallback(async (m: Mode, adId: string, updates: Partial<InterAd>) => {
+    if (Object.keys(updates).length === 1 && Object.prototype.hasOwnProperty.call(updates, 'isActive')) {
+      await apiRequest(`/api/ads/${adId}/toggle`, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_active: updates.isActive }),
+      });
+    } else {
+      await apiRequest(`/api/ads/${adId}`, {
+        method: 'PUT',
+        body: JSON.stringify(interAdPayload(m, updates)),
+      });
+    }
+    await reloadAds();
+  }, [reloadAds]);
+
+  const removeInterAdInMode = useCallback(async (_m: Mode, adId: string) => {
+    await apiRequest(`/api/ads/${adId}`, { method: 'DELETE' });
+    await reloadAds();
+  }, [reloadAds]);
 
   const setTelegramLink = useCallback((link: string) => {
     setTelegramLinkState(link);
@@ -404,157 +519,20 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const categoryNameById = useCallback((m: Mode, categoryId: string) => {
-    const source = m === 'standard' ? stdCats : secCats;
-    return source.find((category) => category.id === categoryId)?.name || categoryId;
-  }, [secCats, stdCats]);
+  const allSites = useMemo(() =>
+    categories.flatMap((category) =>
+      (Array.isArray(category.sites) ? category.sites : []).map((site) => ({
+        ...site,
+        categoryId: category.id,
+        categoryName: category.name,
+      }))
+    ), [categories]);
 
-  const updateSiteInMode = useCallback(async (m: Mode, siteId: number, updates: SiteUpdatePayload) => {
-    if (m !== 'standard') return;
-    await apiRequest(`/api/sites/${siteId}`, {
-      method: 'PUT',
-      body: JSON.stringify(updates),
-    });
-    await reloadCatalog();
-  }, [reloadCatalog]);
-
-  const updateSiteLogoInMode = useCallback(
-    (m: Mode, siteId: number, logoPath: string) => updateSiteInMode(m, siteId, { logo: logoPath }),
-    [updateSiteInMode]
-  );
-
-  const updateSiteStatusInMode = useCallback(async (m: Mode, siteId: number, status: Site['status']) => {
-    if (m !== 'standard') return;
-    await apiRequest(`/api/sites/${siteId}/status`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status }),
-    });
-    await reloadCatalog();
-  }, [reloadCatalog]);
-
-  const updateSiteUrlInMode = useCallback(
-    (m: Mode, siteId: number, url: string) => updateSiteInMode(m, siteId, { url }),
-    [updateSiteInMode]
-  );
-
-  const updateSiteNameInMode = useCallback(
-    (m: Mode, siteId: number, name: string) => updateSiteInMode(m, siteId, { name }),
-    [updateSiteInMode]
-  );
-
-  const addSiteInMode = useCallback(async (m: Mode, categoryId: string, site: Omit<Site, 'id'>) => {
-    if (m !== 'standard') return;
-    await apiRequest('/api/sites', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: site.name,
-        url: site.url,
-        category: categoryNameById(m, categoryId),
-        description: site.description,
-        logo: site.logo,
-        status: site.status,
-        sort_order: 0,
-      }),
-    });
-    await reloadCatalog();
-  }, [categoryNameById, reloadCatalog]);
-
-  const removeSiteInMode = useCallback(async (m: Mode, siteId: number) => {
-    if (m !== 'standard') return;
-    await apiRequest(`/api/sites/${siteId}`, { method: 'DELETE' });
-    await reloadCatalog();
-  }, [reloadCatalog]);
-
-  const addCategoryInMode = useCallback(async (m: Mode, cat: Omit<Category, 'sites'>) => {
-    await apiRequest('/api/categories', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: cat.name,
-        mode: apiMode(m),
-        sort_order: 0,
-      }),
-    });
-    await reloadCatalog();
-  }, [reloadCatalog]);
-
-  const removeCategoryInMode = useCallback(async (_mode: Mode, categoryId: string) => {
-    const id = Number(categoryId);
-    if (!Number.isInteger(id) || id <= 0) {
-      throw new Error('DB에 저장된 카테고리만 삭제할 수 있습니다.');
-    }
-    await apiRequest(`/api/categories/${id}`, { method: 'DELETE' });
-    await reloadCatalog();
-  }, [reloadCatalog]);
-
-  const updateCategoryNameInMode = useCallback(async (m: Mode, categoryId: string, name: string) => {
-    const id = Number(categoryId);
-    if (!Number.isInteger(id) || id <= 0) {
-      throw new Error('DB에 저장된 카테고리만 수정할 수 있습니다.');
-    }
-    await apiRequest(`/api/categories/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify({ name, mode: apiMode(m) }),
-    });
-    await reloadCatalog();
-  }, [reloadCatalog]);
-
-  const addAdInMode = useCallback(async (m: Mode, ad: Omit<Ad, 'id'>) => {
-    await apiRequest('/api/ads', {
-      method: 'POST',
-      body: JSON.stringify(topAdPayload(m, ad)),
-    });
-    await reloadAds();
-  }, [reloadAds]);
-
-  const updateAdInMode = useCallback(async (m: Mode, adId: number, updates: Partial<Ad>) => {
-    await apiRequest(`/api/ads/${adId}`, {
-      method: 'PUT',
-      body: JSON.stringify(topAdPayload(m, updates)),
-    });
-    await reloadAds();
-  }, [reloadAds]);
-
-  const removeAdInMode = useCallback(async (_mode: Mode, adId: number) => {
-    await apiRequest(`/api/ads/${adId}`, { method: 'DELETE' });
-    await reloadAds();
-  }, [reloadAds]);
-
-  const addInterAdInMode = useCallback(async (m: Mode, ad: Omit<InterAd, 'id'>) => {
-    await apiRequest('/api/ads', {
-      method: 'POST',
-      body: JSON.stringify(interAdPayload(m, ad)),
-    });
-    await reloadAds();
-  }, [reloadAds]);
-
-  const updateInterAdInMode = useCallback(async (m: Mode, adId: string, updates: Partial<InterAd>) => {
-    const id = Number(adId);
-    if (!Number.isInteger(id) || id <= 0) {
-      throw new Error('DB에 저장된 광고만 수정할 수 있습니다.');
-    }
-
-    if (Object.keys(updates).length === 1 && Object.prototype.hasOwnProperty.call(updates, 'isActive')) {
-      await apiRequest(`/api/ads/${id}/toggle`, {
-        method: 'PATCH',
-        body: JSON.stringify({ is_active: updates.isActive }),
-      });
-    } else {
-      await apiRequest(`/api/ads/${id}`, {
-        method: 'PUT',
-        body: JSON.stringify(interAdPayload(m, updates)),
-      });
-    }
-    await reloadAds();
-  }, [reloadAds]);
-
-  const removeInterAdInMode = useCallback(async (_mode: Mode, adId: string) => {
-    const id = Number(adId);
-    if (!Number.isInteger(id) || id <= 0) {
-      throw new Error('DB에 저장된 광고만 삭제할 수 있습니다.');
-    }
-    await apiRequest(`/api/ads/${id}`, { method: 'DELETE' });
-    await reloadAds();
-  }, [reloadAds]);
+  const getModeData = useCallback((m: Mode) => ({
+    categories: m === 'secure' ? secCats : stdCats,
+    ads: m === 'secure' ? secAds : stdAds,
+    interAds: m === 'secure' ? secInterAds : stdInterAds,
+  }), [secAds, secCats, secInterAds, stdAds, stdCats, stdInterAds]);
 
   const updateSiteLogo = useCallback((siteId: number, logoPath: string) => updateSiteLogoInMode(mode, siteId, logoPath), [mode, updateSiteLogoInMode]);
   const updateSiteStatus = useCallback((siteId: number, status: Site['status']) => updateSiteStatusInMode(mode, siteId, status), [mode, updateSiteStatusInMode]);
@@ -568,23 +546,6 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const updateAd = useCallback((adId: number, updates: Partial<Ad>) => updateAdInMode(mode, adId, updates), [mode, updateAdInMode]);
   const addAd = useCallback((ad: Omit<Ad, 'id'>) => addAdInMode(mode, ad), [mode, addAdInMode]);
   const removeAd = useCallback((adId: number) => removeAdInMode(mode, adId), [mode, removeAdInMode]);
-
-  const allSites = useMemo(
-    () => categories.flatMap((category) =>
-      (Array.isArray(category.sites) ? category.sites : []).map((site) => ({
-        ...site,
-        categoryId: category.id,
-        categoryName: category.name,
-      }))
-    ),
-    [categories]
-  );
-
-  const getModeData = useCallback((m: Mode) => ({
-    categories: m === 'standard' ? stdCats : secCats,
-    ads: m === 'standard' ? stdAds : secAds,
-    interAds: m === 'standard' ? stdInterAds : secInterAds,
-  }), [secAds, secCats, secInterAds, stdAds, stdCats, stdInterAds]);
 
   return (
     <DataContext.Provider
@@ -616,11 +577,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
         updateSiteStatusInMode,
         updateSiteUrlInMode,
         updateSiteNameInMode,
+        updateSiteCategoryInMode,
         addSiteInMode,
         removeSiteInMode,
         addCategoryInMode,
         removeCategoryInMode,
         updateCategoryNameInMode,
+        reorderCategoriesInMode,
         updateAdInMode,
         addAdInMode,
         removeAdInMode,

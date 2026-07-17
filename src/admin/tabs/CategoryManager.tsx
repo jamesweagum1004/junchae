@@ -1,17 +1,32 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Plus, Trash2, GripVertical, FolderOpen, Edit3, Check, X } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import ModeSubTabs from '../ModeSubTabs';
 
 export default function CategoryManager() {
-  const { getModeData, addCategoryInMode, removeCategoryInMode, updateCategoryNameInMode } = useData();
+  const {
+    getModeData,
+    addCategoryInMode,
+    removeCategoryInMode,
+    updateCategoryNameInMode,
+    reorderCategoriesInMode,
+  } = useData();
   const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('standard');
   const [newName, setNewName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
   const [saving, setSaving] = useState(false);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [localOrder, setLocalOrder] = useState<string[] | null>(null);
 
   const { categories } = getModeData(activeMode);
+  const orderedCategories = useMemo(() => {
+    if (!localOrder) return categories;
+    const byId = new Map(categories.map((category) => [category.id, category]));
+    return localOrder.map((id) => byId.get(id)).filter(Boolean).concat(
+      categories.filter((category) => !localOrder.includes(category.id))
+    ) as typeof categories;
+  }, [categories, localOrder]);
 
   const showError = (message: string, err: unknown) => {
     console.error(message, err);
@@ -27,8 +42,10 @@ export default function CategoryManager() {
         name: newName.trim(),
         icon: 'FolderOpen',
         color: activeMode === 'secure' ? 'orange' : 'blue',
+        sortOrder: categories.length,
       });
       setNewName('');
+      setLocalOrder(null);
     } catch (err) {
       showError('카테고리 추가에 실패했습니다.', err);
     } finally {
@@ -41,16 +58,12 @@ export default function CategoryManager() {
     setSaving(true);
     try {
       await removeCategoryInMode(activeMode, id);
+      setLocalOrder(null);
     } catch (err) {
       showError('카테고리 삭제에 실패했습니다.', err);
     } finally {
       setSaving(false);
     }
-  };
-
-  const startEdit = (id: string, name: string) => {
-    setEditingId(id);
-    setEditName(name);
   };
 
   const saveEdit = async () => {
@@ -67,9 +80,33 @@ export default function CategoryManager() {
     }
   };
 
+  const moveCategory = async (targetId: string) => {
+    if (!draggingId || draggingId === targetId) return;
+
+    const ids = (localOrder || categories.map((category) => category.id)).slice();
+    const from = ids.indexOf(draggingId);
+    const to = ids.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+
+    ids.splice(to, 0, ids.splice(from, 1)[0]);
+    setLocalOrder(ids);
+
+    try {
+      await reorderCategoriesInMode(activeMode, ids);
+    } catch (err) {
+      showError('카테고리 순서 저장에 실패했습니다.', err);
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <ModeSubTabs activeMode={activeMode} onModeChange={setActiveMode} />
+      <ModeSubTabs
+        activeMode={activeMode}
+        onModeChange={(mode) => {
+          setActiveMode(mode);
+          setLocalOrder(null);
+        }}
+      />
 
       <div className="flex items-center gap-3">
         <div className="flex-1 flex gap-2">
@@ -93,10 +130,17 @@ export default function CategoryManager() {
       </div>
 
       <div className="space-y-2">
-        {categories.map((cat) => (
+        {orderedCategories.map((cat) => (
           <div
             key={cat.id}
-            className="flex items-center gap-3 px-3 py-2.5 bg-obsidian-600 border border-obsidian-500 rounded-lg group"
+            draggable
+            onDragStart={() => setDraggingId(cat.id)}
+            onDragOver={(e) => e.preventDefault()}
+            onDrop={() => void moveCategory(cat.id)}
+            onDragEnd={() => setDraggingId(null)}
+            className={`flex items-center gap-3 px-3 py-2.5 bg-obsidian-600 border rounded-lg group ${
+              draggingId === cat.id ? 'border-neon-orange/50 opacity-70' : 'border-obsidian-500'
+            }`}
           >
             <GripVertical size={14} className="text-slate-600 cursor-grab" />
             <FolderOpen size={14} className="text-neon-orange flex-shrink-0" />
@@ -127,7 +171,10 @@ export default function CategoryManager() {
             ) : (
               <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
                 <button
-                  onClick={() => startEdit(cat.id, cat.name)}
+                  onClick={() => {
+                    setEditingId(cat.id);
+                    setEditName(cat.name);
+                  }}
                   className="text-slate-500 hover:text-neon-orange transition-colors"
                 >
                   <Edit3 size={14} />
