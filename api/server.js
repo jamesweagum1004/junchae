@@ -18,6 +18,7 @@ const adUploadDir =
 
 const logoPublicPath = '/uploads/logos';
 const adPublicPath = '/uploads/ads';
+const adminApiToken = (process.env.ADMIN_API_TOKEN || '').trim();
 const maxLogoSize = 2 * 1024 * 1024;
 const maxAdImageSize = 5 * 1024 * 1024;
 const allowedLogoExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.ico']);
@@ -38,6 +39,10 @@ const allowedAdImageMimeTypes = new Set([
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
+
+if (!adminApiToken) {
+  console.warn('ADMIN_API_TOKEN is not configured');
+}
 
 const db = mysql.createPool({
   host: process.env.DB_HOST,
@@ -205,6 +210,24 @@ function jsonError(res, status, error, message) {
     error,
     ...(message ? { message } : {}),
   });
+}
+
+function tokenMatches(expectedToken, receivedToken) {
+  if (!expectedToken || typeof receivedToken !== 'string') return false;
+
+  const expected = Buffer.from(expectedToken);
+  const received = Buffer.from(receivedToken);
+  return expected.length === received.length && crypto.timingSafeEqual(expected, received);
+}
+
+function requireAdminToken(req, res, next) {
+  if (!adminApiToken) return next();
+
+  if (!tokenMatches(adminApiToken, req.get('x-admin-token'))) {
+    return res.status(401).json({ ok: false, error: 'Unauthorized' });
+  }
+
+  return next();
 }
 
 function sendDbError(res, err) {
@@ -630,7 +653,7 @@ app.get('/api/settings', asyncRoute(async (req, res) => {
   return res.json({ ok: true, data: settings });
 }));
 
-app.post('/api/settings', asyncRoute(async (req, res) => {
+app.post('/api/settings', requireAdminToken, asyncRoute(async (req, res) => {
   const mode = normalizeMode(req.body?.mode);
   const section = normalizeSafeKey(req.body?.section);
   if (!section) {
@@ -668,7 +691,7 @@ app.get('/api/sites/:id/seo', asyncRoute(async (req, res) => {
   return res.json({ ok: true, data: formatSeo(site) });
 }));
 
-app.patch('/api/sites/:id/seo', asyncRoute(async (req, res) => {
+app.patch('/api/sites/:id/seo', requireAdminToken, asyncRoute(async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
@@ -695,7 +718,7 @@ app.patch('/api/sites/:id/seo', asyncRoute(async (req, res) => {
   return res.json({ ok: true, data: formatSeo(updated) });
 }));
 
-app.post('/api/deepseek/test', asyncRoute(async (req, res) => {
+app.post('/api/deepseek/test', requireAdminToken, asyncRoute(async (req, res) => {
   const mode = normalizeMode(req.body?.mode);
   const site = req.body?.site || {};
   const { promptTemplate } = await getDeepSeekConfig(mode);
@@ -718,7 +741,7 @@ app.post('/api/deepseek/test', asyncRoute(async (req, res) => {
   }
 }));
 
-app.post('/api/deepseek/generate-seo', asyncRoute(async (req, res) => {
+app.post('/api/deepseek/generate-seo', requireAdminToken, asyncRoute(async (req, res) => {
   const mode = normalizeMode(req.body?.mode);
   const siteId = parseId(req.body?.site_id);
   if (!siteId) return jsonError(res, 400, 'INVALID_ID', 'site_id is required.');
@@ -763,7 +786,7 @@ seo_og_title, seo_og_description, seo_score 숫자, recommendations 배열
   }
 }));
 
-app.post('/api/deepseek/generate-global-seo', asyncRoute(async (req, res) => {
+app.post('/api/deepseek/generate-global-seo', requireAdminToken, asyncRoute(async (req, res) => {
   const mode = normalizeMode(req.body?.mode);
   const categories = Array.isArray(req.body?.categories) ? req.body.categories : [];
   const sites = Array.isArray(req.body?.sites) ? req.body.sites : [];
@@ -844,7 +867,7 @@ app.get('/api/categories', asyncRoute(async (req, res) => {
   res.json({ ok: true, data: rows });
 }));
 
-app.post('/api/categories', asyncRoute(async (req, res) => {
+app.post('/api/categories', requireAdminToken, asyncRoute(async (req, res) => {
   const category = normalizeCategoryInput(req.body || {});
   if (!category.name) {
     return jsonError(res, 400, 'VALIDATION_ERROR', 'name is required.');
@@ -865,7 +888,7 @@ app.post('/api/categories', asyncRoute(async (req, res) => {
   }
 }));
 
-app.patch('/api/categories/reorder', asyncRoute(async (req, res) => {
+app.patch('/api/categories/reorder', requireAdminToken, asyncRoute(async (req, res) => {
   const mode = normalizeMode(req.body?.mode);
   const items = Array.isArray(req.body?.items) ? req.body.items : [];
 
@@ -902,7 +925,7 @@ app.patch('/api/categories/reorder', asyncRoute(async (req, res) => {
   return res.json({ ok: true, data: rows });
 }));
 
-app.put('/api/categories/:id', asyncRoute(async (req, res) => {
+app.put('/api/categories/:id', requireAdminToken, asyncRoute(async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
@@ -954,7 +977,7 @@ app.put('/api/categories/:id', asyncRoute(async (req, res) => {
   }
 }));
 
-app.delete('/api/categories/:id', asyncRoute(async (req, res) => {
+app.delete('/api/categories/:id', requireAdminToken, asyncRoute(async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
@@ -997,7 +1020,7 @@ app.get('/api/ads', asyncRoute(async (req, res) => {
   res.json({ ok: true, data: rows });
 }));
 
-app.post('/api/ads', asyncRoute(async (req, res) => {
+app.post('/api/ads', requireAdminToken, asyncRoute(async (req, res) => {
   const ad = normalizeAdInput(req.body || {});
   if (!ad.title) {
     return jsonError(res, 400, 'VALIDATION_ERROR', 'title is required.');
@@ -1028,7 +1051,7 @@ app.post('/api/ads', asyncRoute(async (req, res) => {
   return res.status(201).json({ ok: true, data: created });
 }));
 
-app.put('/api/ads/:id', asyncRoute(async (req, res) => {
+async function saveAdUpdates(req, res) {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
@@ -1053,9 +1076,13 @@ app.put('/api/ads/:id', asyncRoute(async (req, res) => {
 
   const updated = await getAdById(id);
   return res.json({ ok: true, data: updated });
-}));
+}
 
-app.patch('/api/ads/:id/toggle', asyncRoute(async (req, res) => {
+app.put('/api/ads/:id', requireAdminToken, asyncRoute(saveAdUpdates));
+
+app.patch('/api/ads/:id', requireAdminToken, asyncRoute(saveAdUpdates));
+
+app.patch('/api/ads/:id/toggle', requireAdminToken, asyncRoute(async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
@@ -1069,7 +1096,7 @@ app.patch('/api/ads/:id/toggle', asyncRoute(async (req, res) => {
   return res.json({ ok: true, data: updated });
 }));
 
-app.delete('/api/ads/:id', asyncRoute(async (req, res) => {
+app.delete('/api/ads/:id', requireAdminToken, asyncRoute(async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
@@ -1081,7 +1108,7 @@ app.delete('/api/ads/:id', asyncRoute(async (req, res) => {
   return res.json({ ok: true, data: { id } });
 }));
 
-app.post('/api/uploads/logo', (req, res) => {
+app.post('/api/uploads/logo', requireAdminToken, (req, res) => {
   uploadLogo.single('logo')(req, res, (err) => {
     if (err) {
       console.error('Logo upload error:', err);
@@ -1105,7 +1132,7 @@ app.post('/api/uploads/logo', (req, res) => {
   });
 });
 
-app.post('/api/uploads/ad-image', (req, res) => {
+app.post('/api/uploads/ad-image', requireAdminToken, (req, res) => {
   uploadAdImage.single('image')(req, res, (err) => {
     if (err) {
       console.error('Ad image upload error:', err);
@@ -1129,7 +1156,7 @@ app.post('/api/uploads/ad-image', (req, res) => {
   });
 });
 
-app.post('/api/uploads/logo/from-url', asyncRoute(async (req, res) => {
+app.post('/api/uploads/logo/from-url', requireAdminToken, asyncRoute(async (req, res) => {
   const sourceUrl = normalizeOptionalText(req.body?.url);
   if (!sourceUrl) {
     return jsonError(res, 400, 'URL_REQUIRED', 'url is required.');
@@ -1187,7 +1214,7 @@ app.post('/api/uploads/logo/from-url', asyncRoute(async (req, res) => {
   });
 }));
 
-app.post('/api/sites', asyncRoute(async (req, res) => {
+app.post('/api/sites', requireAdminToken, asyncRoute(async (req, res) => {
   const site = normalizeSiteInput(req.body || {});
 
   if (!site.name || !site.url) {
@@ -1213,7 +1240,7 @@ app.post('/api/sites', asyncRoute(async (req, res) => {
   return res.status(201).json({ ok: true, data: created });
 }));
 
-app.put('/api/sites/:id', asyncRoute(async (req, res) => {
+async function saveSiteUpdates(req, res) {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
@@ -1242,9 +1269,13 @@ app.put('/api/sites/:id', asyncRoute(async (req, res) => {
 
   const updated = await getSiteById(id);
   return res.json({ ok: true, data: updated });
-}));
+}
 
-app.patch('/api/sites/:id/status', asyncRoute(async (req, res) => {
+app.put('/api/sites/:id', requireAdminToken, asyncRoute(saveSiteUpdates));
+
+app.patch('/api/sites/:id', requireAdminToken, asyncRoute(saveSiteUpdates));
+
+app.patch('/api/sites/:id/status', requireAdminToken, asyncRoute(async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
@@ -1262,7 +1293,7 @@ app.patch('/api/sites/:id/status', asyncRoute(async (req, res) => {
   return res.json({ ok: true, data: updated });
 }));
 
-app.delete('/api/sites/:id', asyncRoute(async (req, res) => {
+app.delete('/api/sites/:id', requireAdminToken, asyncRoute(async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 

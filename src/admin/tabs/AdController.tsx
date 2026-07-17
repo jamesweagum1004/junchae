@@ -21,6 +21,7 @@ import {
 import { useData } from '../../context/DataContext';
 import ModeSubTabs from '../ModeSubTabs';
 import { Ad, InterAd } from '../../data/categories';
+import { adminAuthHeaders } from '../../lib/adminApi';
 
 const BADGE_OPTIONS = ['HOT', 'NEW', 'SALE', 'AD', 'VIP', 'SAFE', 'BEST'];
 const BADGE_COLORS: Record<string, string> = {
@@ -42,7 +43,11 @@ const parseImageUploadResponse = async (res: Response) => {
 const uploadAdImage = async (file: File) => {
   const formData = new FormData();
   formData.append('image', file);
-  const res = await fetch('/api/uploads/ad-image', { method: 'POST', body: formData });
+  const res = await fetch('/api/uploads/ad-image', {
+    method: 'POST',
+    headers: adminAuthHeaders(),
+    body: formData,
+  });
   return parseImageUploadResponse(res);
 };
 

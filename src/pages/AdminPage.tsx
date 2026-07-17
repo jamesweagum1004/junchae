@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   FolderOpen,
   List,
@@ -30,6 +30,7 @@ import PSEOManager from '../admin/tabs/PSEOManager';
 import AISEOManager from '../admin/tabs/AISEOManager';
 import BridgeAdManager from '../admin/tabs/BridgeAdManager';
 import AccountSettings from '../admin/tabs/AccountSettings';
+import { ADMIN_API_TOKEN_STORAGE_KEY } from '../lib/adminApi';
 
 const TABS = [
   { id: 'categories', label: '카테고리 관리', icon: FolderOpen, desc: '추가/삭제/순서' },
@@ -49,6 +50,32 @@ export default function AdminPage() {
   const { isAuthenticated, logout } = useAdminAuth();
   const [activeTab, setActiveTab] = useState('categories');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [adminApiToken, setAdminApiToken] = useState('');
+  const [tokenSaved, setTokenSaved] = useState(false);
+
+  useEffect(() => {
+    try {
+      setAdminApiToken(localStorage.getItem(ADMIN_API_TOKEN_STORAGE_KEY) || '');
+    } catch {
+      setAdminApiToken('');
+    }
+  }, []);
+
+  const saveAdminApiToken = () => {
+    try {
+      const token = adminApiToken.trim();
+      if (token) {
+        localStorage.setItem(ADMIN_API_TOKEN_STORAGE_KEY, token);
+        setAdminApiToken(token);
+      } else {
+        localStorage.removeItem(ADMIN_API_TOKEN_STORAGE_KEY);
+      }
+      setTokenSaved(true);
+      setTimeout(() => setTokenSaved(false), 1800);
+    } catch {
+      setTokenSaved(false);
+    }
+  };
 
   if (!isAuthenticated) {
     return <AdminLogin onSuccess={() => {}} onExit={() => navigate('/')} />;
@@ -139,6 +166,29 @@ export default function AdminPage() {
               );
             })}
           </nav>
+
+          <div className="border-t border-obsidian-600 p-3 space-y-2">
+            <label className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider text-slate-500">
+              <KeyRound size={12} className="text-neon-orange" />
+              API Token
+            </label>
+            <input
+              type="password"
+              value={adminApiToken}
+              onChange={(e) => setAdminApiToken(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') saveAdminApiToken();
+              }}
+              placeholder="x-admin-token"
+              className="w-full px-2.5 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-slate-200 placeholder-slate-600 focus:outline-none focus:border-neon-orange font-mono"
+            />
+            <button
+              onClick={saveAdminApiToken}
+              className="w-full px-3 py-2 bg-obsidian-700 border border-obsidian-500 text-xs font-semibold text-slate-300 rounded-lg hover:border-neon-orange/50 hover:text-white transition-colors"
+            >
+              {tokenSaved ? 'Saved' : 'Save Token'}
+            </button>
+          </div>
         </aside>
 
         {sidebarOpen && <div className="fixed inset-0 z-30 bg-black/50 lg:hidden" onClick={() => setSidebarOpen(false)} />}

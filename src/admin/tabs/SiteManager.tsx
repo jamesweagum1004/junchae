@@ -14,6 +14,7 @@ import {
 import { useData } from '../../context/DataContext';
 import { Site, SiteStatus } from '../../data/categories';
 import ModeSubTabs from '../ModeSubTabs';
+import { adminAuthHeaders } from '../../lib/adminApi';
 
 const statusOptions: { value: SiteStatus; label: string }[] = [
   { value: 'normal', label: '정상' },
@@ -95,14 +96,18 @@ export default function SiteManager() {
   const uploadLogoFile = async (file: File) => {
     const body = new FormData();
     body.append('logo', file);
-    const res = await fetch('/api/uploads/logo', { method: 'POST', body });
+    const res = await fetch('/api/uploads/logo', {
+      method: 'POST',
+      headers: adminAuthHeaders(),
+      body,
+    });
     return parseUploadResponse(res);
   };
 
   const downloadLogoFromUrl = async (url: string) => {
     const res = await fetch('/api/uploads/logo/from-url', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...adminAuthHeaders() },
       body: JSON.stringify({ url }),
     });
     return parseUploadResponse(res);

@@ -13,6 +13,7 @@ import {
   standardInterAds,
 } from '../data/categories';
 import { useTheme } from './ThemeContext';
+import { adminAuthHeaders, isWriteRequest } from '../lib/adminApi';
 
 export type MobileColumns = 1 | 2;
 type Mode = 'standard' | 'secure';
@@ -107,6 +108,7 @@ const apiRequest = async (path: string, init?: RequestInit) => {
     ...init,
     headers: {
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
+      ...(isWriteRequest(init) ? adminAuthHeaders() : {}),
       ...init?.headers,
     },
   });
