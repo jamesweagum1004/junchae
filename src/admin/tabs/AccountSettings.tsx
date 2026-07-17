@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { KeyRound, Eye, EyeOff, Route, Check, AlertTriangle, Send, ToggleLeft, ToggleRight } from 'lucide-react';
 import { useAdminAuth } from '../../context/AdminAuthContext';
 import { useData } from '../../context/DataContext';
+import { ADMIN_API_TOKEN_STORAGE_KEY } from '../../lib/adminApi';
 
 export default function AccountSettings() {
   const { cred, updateCred, adminPath, updateAdminPath } = useAdminAuth();
@@ -12,12 +13,22 @@ export default function AccountSettings() {
   const [showPw, setShowPw] = useState(false);
   const [savedCred, setSavedCred] = useState(false);
   const [credError, setCredError] = useState('');
+  const [adminApiToken, setAdminApiToken] = useState('');
+  const [savedToken, setSavedToken] = useState(false);
 
   const [pathInput, setPathInput] = useState(adminPath);
   const [savedPath, setSavedPath] = useState(false);
 
   const [tgLink, setTgLink] = useState(telegramLink);
   const [savedTg, setSavedTg] = useState(false);
+
+  useEffect(() => {
+    try {
+      setAdminApiToken(localStorage.getItem(ADMIN_API_TOKEN_STORAGE_KEY) || '');
+    } catch {
+      setAdminApiToken('');
+    }
+  }, []);
 
   const handleSaveCred = () => {
     if (!newId.trim() || !newPw.trim()) {
@@ -40,6 +51,22 @@ export default function AccountSettings() {
     updateAdminPath(pathInput);
     setSavedPath(true);
     setTimeout(() => setSavedPath(false), 3000);
+  };
+
+  const handleSaveAdminApiToken = () => {
+    try {
+      const token = adminApiToken.trim();
+      if (token) {
+        localStorage.setItem(ADMIN_API_TOKEN_STORAGE_KEY, token);
+        setAdminApiToken(token);
+      } else {
+        localStorage.removeItem(ADMIN_API_TOKEN_STORAGE_KEY);
+      }
+      setSavedToken(true);
+      setTimeout(() => setSavedToken(false), 3000);
+    } catch {
+      setSavedToken(false);
+    }
   };
 
   const handleSaveTg = () => {
@@ -112,6 +139,49 @@ export default function AccountSettings() {
         >
           <KeyRound size={14} />
           계정 정보 저장
+        </button>
+      </div>
+
+      {/* API Token Settings */}
+      <div className="glass-dark rounded-2xl p-5 space-y-4">
+        <div className="flex items-center gap-2 pb-3 border-b border-white/[0.06]">
+          <KeyRound size={14} className="text-neon-orange" />
+          <h3 className="text-sm font-bold text-slate-200 tracking-tight">API Token 설정</h3>
+        </div>
+
+        <p className="text-xs text-slate-500 leading-relaxed">
+          관리자 저장/수정/삭제 요청과 n8n 자동 등록에 사용되는 x-admin-token입니다.
+        </p>
+
+        <div>
+          <label className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-1.5 block">
+            x-admin-token
+          </label>
+          <input
+            type="password"
+            value={adminApiToken}
+            onChange={(e) => setAdminApiToken(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleSaveAdminApiToken();
+            }}
+            className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 text-sm text-white font-mono placeholder-slate-600 focus:outline-none focus:border-neon-orange/40 focus:ring-1 focus:ring-neon-orange/20 transition-all"
+            placeholder="x-admin-token"
+          />
+        </div>
+
+        {savedToken && (
+          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 animate-fade-in">
+            <Check size={13} className="text-emerald-400 flex-shrink-0" />
+            <span className="text-[11px] font-mono text-emerald-300">API Token이 저장되었습니다.</span>
+          </div>
+        )}
+
+        <button
+          onClick={handleSaveAdminApiToken}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-obsidian-600 border border-white/[0.08] text-slate-200 text-sm font-bold hover:bg-obsidian-500 transition-colors"
+        >
+          <KeyRound size={14} />
+          API Token 저장
         </button>
       </div>
 

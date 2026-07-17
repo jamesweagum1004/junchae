@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Globe, ChevronRight, AlertTriangle, ShieldCheck, Lock, MessageCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { useData } from '../context/DataContext';
 import Header from '../components/Header';
@@ -9,8 +10,9 @@ import CategoryGrid from '../components/CategoryGrid';
 import AIBridgeOverlay from '../components/AIBridgeOverlay';
 
 export default function MainPage() {
+  const navigate = useNavigate();
   const { isSecure, setMode } = useTheme();
-  const { secureCategories, telegramLink, telegramVisible } = useData();
+  const { categories, secureCategories, telegramLink, telegramVisible } = useData();
 
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
 
@@ -72,6 +74,33 @@ export default function MainPage() {
                 <>⚠️ <span className="font-bold">SYSTEM:</span> 현재 일반 인터넷망 접속 중. 통신사 검열 및 도메인 차단 방지 터널이 비활성화 상태입니다. 실시간 대피소 주소 해독을 위해 우측 상단의 <button onClick={() => setMode('secure')} className="font-bold text-rose-600 underline decoration-rose-400/50 hover:decoration-rose-500 underline-offset-2">[안전 접속 ⚡]</button>을 켜십시오.</>
               )}
             </p>
+          </div>
+
+          <div className="md:hidden -mx-4 px-4 text-left">
+            <div className="flex items-center gap-2 mb-2">
+              <Globe size={13} className={isSecure ? 'text-neon-orange' : 'text-blue-600'} />
+              <span className={`text-[11px] font-bold uppercase tracking-widest ${isSecure ? 'text-neon-orange/70' : 'text-slate-500'}`}>
+                카테고리 바로가기
+              </span>
+            </div>
+            <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {categories.map((category) => (
+                <button
+                  key={category.id}
+                  onClick={() => navigate(`/category/${encodeURIComponent(category.id)}`)}
+                  className={`flex-shrink-0 min-h-11 rounded-full px-4 text-sm font-bold transition-all active:scale-95 ${
+                    isSecure
+                      ? 'bg-white/[0.05] text-slate-100 border border-white/[0.08] hover:border-neon-orange/40 hover:text-neon-orange'
+                      : 'bg-white/85 text-slate-800 border border-slate-200 shadow-sm hover:border-blue-200 hover:text-blue-700'
+                  }`}
+                >
+                  <span>{category.name}</span>
+                  <span className={`ml-2 text-xs font-mono ${isSecure ? 'text-slate-500' : 'text-slate-400'}`}>
+                    {category.sites.length}
+                  </span>
+                </button>
+              ))}
+            </div>
           </div>
 
         </section>
