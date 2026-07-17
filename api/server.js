@@ -763,6 +763,72 @@ seo_og_title, seo_og_description, seo_score 숫자, recommendations 배열
   }
 }));
 
+app.post('/api/deepseek/generate-global-seo', asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.body?.mode);
+  const categories = Array.isArray(req.body?.categories) ? req.body.categories : [];
+  const sites = Array.isArray(req.body?.sites) ? req.body.sites : [];
+  const { promptTemplate } = await getDeepSeekConfig(mode);
+
+  const categorySummary = categories
+    .map((category) => {
+      if (typeof category === 'string') return category;
+      return category?.name || '';
+    })
+    .filter(Boolean)
+    .slice(0, 50)
+    .join(', ');
+
+  const siteSummary = sites
+    .map((site) => {
+      const name = site?.name || '';
+      const category = site?.category || site?.categoryName || '';
+      const description = site?.description || '';
+      return [name, category, description].filter(Boolean).join(' / ');
+    })
+    .filter(Boolean)
+    .slice(0, 80)
+    .join('\n');
+
+  const prompt = `
+${promptTemplate}
+
+junchae.com 메인사이트의 검색 노출용 Global SEO 데이터를 한국어로 생성하세요.
+아래 카테고리와 사이트 목록을 참고하되, 과장된 표현이나 허위 문구는 피하세요.
+반드시 JSON만 출력하세요.
+
+카테고리:
+${categorySummary || '카테고리 없음'}
+
+사이트 목록:
+${siteSummary || '사이트 없음'}
+
+JSON 필드:
+site_name, homepage_title, homepage_description, homepage_keywords,
+canonical_url, og_title, og_description, og_image, og_type, robots,
+recommendations 배열
+
+기본 도메인은 https://junchae.com 입니다.
+og_image 기본값은 /uploads/og/default-og.png 입니다.
+og_type 기본값은 website 입니다.
+robots 기본값은 index,follow 입니다.
+`;
+
+  try {
+    const text = await callDeepSeek({
+      mode,
+      messages: [
+        { role: 'system', content: 'You are a Korean technical SEO expert. Return valid JSON only and never reveal secrets.' },
+        { role: 'user', content: prompt },
+      ],
+    });
+    const parsed = parseJsonFromText(text);
+    return res.json({ ok: true, data: { text, json: parsed } });
+  } catch (err) {
+    console.error('DeepSeek global SEO generation error:', { code: err.code, status: err.status, message: err.message, body: err.body });
+    return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', err.message);
+  }
+}));
+
 app.get('/api/categories', asyncRoute(async (req, res) => {
   const values = [];
   let where = '';

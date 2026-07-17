@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Bot, CheckCircle, Search, Wand2 } from 'lucide-react';
 import ModeSubTabs from '../ModeSubTabs';
 import { useData } from '../../context/DataContext';
-import { apiJson, apiMode } from '../../lib/adminApi';
+import { apiJson, apiMode, loadSettings, saveSettings, type AdminMode } from '../../lib/adminApi';
+import type { Category, Site } from '../../data/categories';
 
 type SeoDraft = {
   seo_title: string;
@@ -15,6 +16,23 @@ type SeoDraft = {
   seo_og_description: string;
   seo_og_image: string;
   seo_score: number;
+};
+
+type SeoSite = Site & {
+  categoryName: string;
+};
+
+type GlobalSeoSettings = {
+  site_name: string;
+  homepage_title: string;
+  homepage_description: string;
+  homepage_keywords: string;
+  canonical_url: string;
+  og_title: string;
+  og_description: string;
+  og_image: string;
+  og_type: string;
+  robots: string;
 };
 
 const emptyDraft: SeoDraft = {
@@ -30,9 +48,233 @@ const emptyDraft: SeoDraft = {
   seo_score: 0,
 };
 
+const defaultGlobalSeo: GlobalSeoSettings = {
+  site_name: '전체닷컴',
+  homepage_title: '전체닷컴 - 인기 사이트 주소 모음 | 빠른 링크 허브',
+  homepage_description:
+    '전체닷컴은 포털, 커뮤니티, OTT, 영화, 웹툰, 쇼핑 등 주요 사이트 주소를 카테고리별로 빠르게 확인할 수 있는 링크 허브입니다.',
+  homepage_keywords: '사이트 주소, 링크 모음, 인기 사이트, 커뮤니티 주소, 웹툰 주소, OTT 사이트, 영화 사이트, 전체닷컴',
+  canonical_url: 'https://junchae.com',
+  og_title: '전체닷컴 - 인기 사이트 주소 모음',
+  og_description: '포털, 커뮤니티, 웹툰, 영화, OTT, 쇼핑 사이트를 한 곳에서 빠르게 확인하세요.',
+  og_image: '/uploads/og/default-og.png',
+  og_type: 'website',
+  robots: 'index,follow',
+};
+
+const textKeys: Array<keyof Omit<SeoDraft, 'seo_score'>> = [
+  'seo_title',
+  'seo_description',
+  'seo_keywords',
+  'seo_slug',
+  'seo_h1',
+  'seo_canonical',
+  'seo_og_title',
+  'seo_og_description',
+  'seo_og_image',
+];
+
+const globalSeoFields: Array<{ key: keyof GlobalSeoSettings; label: string; multiline?: boolean }> = [
+  { key: 'site_name', label: '사이트 이름' },
+  { key: 'homepage_title', label: '홈페이지 제목' },
+  { key: 'homepage_description', label: '홈페이지 메타 설명', multiline: true },
+  { key: 'homepage_keywords', label: '홈페이지 키워드', multiline: true },
+  { key: 'canonical_url', label: 'Canonical URL' },
+  { key: 'og_title', label: 'OG 제목' },
+  { key: 'og_description', label: 'OG 설명', multiline: true },
+  { key: 'og_image', label: 'OG 이미지' },
+  { key: 'og_type', label: 'OG 타입' },
+  { key: 'robots', label: 'Robots' },
+];
+
+const siteTextFields: Array<{ key: keyof Omit<SeoDraft, 'seo_score'>; label: string; multiline?: boolean }> = [
+  { key: 'seo_title', label: 'SEO 제목' },
+  { key: 'seo_h1', label: 'H1 제목' },
+  { key: 'seo_slug', label: 'SEO slug' },
+  { key: 'seo_canonical', label: 'Canonical URL' },
+  { key: 'seo_og_title', label: 'OG 제목' },
+  { key: 'seo_og_image', label: 'OG 이미지' },
+  { key: 'seo_description', label: '메타 설명', multiline: true },
+  { key: 'seo_keywords', label: '키워드', multiline: true },
+  { key: 'seo_og_description', label: 'OG 설명', multiline: true },
+];
+
+const stringifyPreviewValue = (value: unknown, fallback: string) => {
+  if (Array.isArray(value)) return value.filter(Boolean).join(', ');
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  return fallback;
+};
+
+const siteToDraft = (site: SeoSite): SeoDraft => ({
+  seo_title: site.seo_title || `${site.name} 최신 정보`,
+  seo_description: site.seo_description || site.description || '',
+  seo_keywords: site.seo_keywords || site.name,
+  seo_slug: site.seo_slug || site.name.toLowerCase().replace(/\s+/g, '-'),
+  seo_h1: site.seo_h1 || site.name,
+  seo_canonical: site.seo_canonical || site.url,
+  seo_og_title: site.seo_og_title || site.seo_title || site.name,
+  seo_og_description: site.seo_og_description || site.seo_description || site.description || '',
+  seo_og_image: site.seo_og_image || site.logo || '',
+  seo_score: site.seo_score || 0,
+});
+
+function GlobalSeoPanel({
+  activeMode,
+  categories,
+  sites,
+}: {
+  activeMode: AdminMode;
+  categories: Category[];
+  sites: SeoSite[];
+}) {
+  const [settings, setSettings] = useState<GlobalSeoSettings>(defaultGlobalSeo);
+  const [aiPreview, setAiPreview] = useState<Record<string, unknown> | null>(null);
+  const [aiText, setAiText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadSettings(activeMode, 'global_seo')
+      .then((data) => {
+        if (cancelled) return;
+        setSettings({ ...defaultGlobalSeo, ...data });
+        setAiPreview(null);
+        setAiText('');
+      })
+      .catch((err) => {
+        console.error('Global SEO 설정 불러오기 실패', err);
+        if (!cancelled) setSettings(defaultGlobalSeo);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeMode]);
+
+  const updateField = (key: keyof GlobalSeoSettings, value: string) => {
+    setSettings((current) => ({ ...current, [key]: value }));
+  };
+
+  const saveGlobalSeo = async (nextSettings = settings) => {
+    try {
+      await saveSettings(activeMode, 'global_seo', nextSettings);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      console.error('Global SEO 저장 실패', err);
+      alert('메인 SEO 설정 저장에 실패했습니다.');
+    }
+  };
+
+  const generateGlobalSeo = async () => {
+    setLoading(true);
+    setAiPreview(null);
+    setAiText('');
+    try {
+      const data = await apiJson<{ text: string; json: Record<string, unknown> | null }>(
+        '/api/deepseek/generate-global-seo',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            mode: apiMode(activeMode),
+            categories: categories.map((category) => ({ name: category.name })),
+            sites: sites.map((site) => ({
+              name: site.name,
+              url: site.url,
+              category: site.categoryName,
+              description: site.description,
+            })),
+          }),
+        }
+      );
+      setAiText(data.text);
+      setAiPreview(data.json);
+    } catch (err) {
+      console.error('AI 메인 SEO 생성 실패', err);
+      setAiText(err instanceof Error ? err.message : 'AI 메인 SEO 생성에 실패했습니다.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const applyPreview = () => {
+    if (!aiPreview) return;
+    const next = { ...settings };
+    (Object.keys(defaultGlobalSeo) as Array<keyof GlobalSeoSettings>).forEach((key) => {
+      next[key] = stringifyPreviewValue(aiPreview[key], next[key]);
+    });
+    setSettings(next);
+  };
+
+  return (
+    <div className="p-5 bg-obsidian-600 border border-obsidian-500 rounded-xl space-y-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-base font-bold text-white">메인 SEO 설정</h3>
+          <p className="text-xs text-slate-500 mt-1">현재 모드의 junchae.com 메인 title, meta, OG 태그를 관리합니다.</p>
+        </div>
+        {saved && <CheckCircle size={16} className="text-emerald-400 shrink-0" />}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {globalSeoFields.map((field) => (
+          <label key={field.key} className={field.multiline ? 'md:col-span-2 space-y-1' : 'space-y-1'}>
+            <span className="text-[11px] text-slate-500">{field.label}</span>
+            {field.multiline ? (
+              <textarea
+                value={settings[field.key]}
+                onChange={(e) => updateField(field.key, e.target.value)}
+                rows={3}
+                className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange resize-none"
+              />
+            ) : (
+              <input
+                value={settings[field.key]}
+                onChange={(e) => updateField(field.key, e.target.value)}
+                className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
+              />
+            )}
+          </label>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => void saveGlobalSeo()} className="px-4 py-2 bg-neon-orange text-white text-xs font-semibold rounded-lg">
+          메인 SEO 저장
+        </button>
+        <button
+          onClick={() => void generateGlobalSeo()}
+          disabled={loading}
+          className="px-4 py-2 bg-obsidian-700 border border-obsidian-500 text-slate-200 text-xs font-semibold rounded-lg flex items-center gap-1.5 disabled:opacity-60"
+        >
+          {loading ? <span className="animate-spin w-3 h-3 border-2 border-white/30 border-t-white rounded-full" /> : <Wand2 size={13} />}
+          AI로 메인 SEO 생성
+        </button>
+      </div>
+
+      {(aiPreview || aiText) && (
+        <div className="p-4 bg-black/30 border border-neon-orange/20 rounded-lg space-y-3">
+          <div className="flex items-center gap-2 text-xs font-semibold text-neon-orange">
+            <Bot size={14} /> AI 메인 SEO 미리보기
+          </div>
+          <pre className="text-xs text-slate-300 whitespace-pre-wrap max-h-64 overflow-y-auto">
+            {aiPreview ? JSON.stringify(aiPreview, null, 2) : aiText}
+          </pre>
+          {aiPreview && (
+            <button onClick={applyPreview} className="px-3 py-1.5 bg-neon-orange text-white text-xs rounded">
+              미리보기 적용
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AISEOManager() {
   const { getModeData, reloadSites } = useData();
-  const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('standard');
+  const [activeMode, setActiveMode] = useState<AdminMode>('standard');
   const { categories } = getModeData(activeMode);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [query, setQuery] = useState('');
@@ -45,23 +287,34 @@ export default function AISEOManager() {
   const [loadingAi, setLoadingAi] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const sites = useMemo(() =>
-    categories.flatMap((category) =>
-      category.sites.map((site) => ({
-        ...site,
-        categoryName: category.name,
-      }))
-    ), [categories]);
+  const sites = useMemo<SeoSite[]>(
+    () =>
+      categories.flatMap((category) =>
+        category.sites.map((site) => ({
+          ...site,
+          categoryName: category.name,
+        }))
+      ),
+    [categories]
+  );
 
-  const filteredSites = sites.filter((site) => {
-    const matchesQuery = !query.trim() || site.name.toLowerCase().includes(query.toLowerCase());
-    const matchesCategory = categoryFilter === 'all' || site.categoryName === categoryFilter;
-    const missingSeo = !site.seo_title || !site.seo_description;
-    const lowScore = (site.seo_score || 0) < 60;
-    return matchesQuery && matchesCategory && (!missingOnly || missingSeo) && (!lowScoreOnly || lowScore);
-  });
+  const filteredSites = useMemo(
+    () =>
+      sites.filter((site) => {
+        const lowerQuery = query.trim().toLowerCase();
+        const matchesQuery = !lowerQuery || site.name.toLowerCase().includes(lowerQuery);
+        const matchesCategory = categoryFilter === 'all' || site.categoryName === categoryFilter;
+        const missingSeo = !site.seo_title || !site.seo_description;
+        const lowScore = (site.seo_score || 0) < 60;
+        return matchesQuery && matchesCategory && (!missingOnly || missingSeo) && (!lowScoreOnly || lowScore);
+      }),
+    [categoryFilter, lowScoreOnly, missingOnly, query, sites]
+  );
 
-  const selected = sites.find((site) => site.id === selectedId) || filteredSites[0];
+  const selected = useMemo(
+    () => sites.find((site) => site.id === selectedId) || filteredSites[0] || null,
+    [filteredSites, selectedId, sites]
+  );
 
   const openSite = (siteId: number) => {
     const site = sites.find((item) => item.id === siteId);
@@ -69,19 +322,18 @@ export default function AISEOManager() {
     setSelectedId(siteId);
     setAiPreview(null);
     setAiText('');
-    setDraft({
-      seo_title: site.seo_title || `${site.name} 최신 정보`,
-      seo_description: site.seo_description || site.description || '',
-      seo_keywords: site.seo_keywords || site.name,
-      seo_slug: site.seo_slug || site.name.toLowerCase().replace(/\s+/g, '-'),
-      seo_h1: site.seo_h1 || site.name,
-      seo_canonical: site.seo_canonical || site.url,
-      seo_og_title: site.seo_og_title || site.seo_title || site.name,
-      seo_og_description: site.seo_og_description || site.seo_description || site.description || '',
-      seo_og_image: site.seo_og_image || site.logo || '',
-      seo_score: site.seo_score || 0,
-    });
+    setDraft(siteToDraft(site));
   };
+
+  useEffect(() => {
+    if (selectedId && filteredSites.some((site) => site.id === selectedId)) return;
+    if (filteredSites.length > 0) {
+      openSite(filteredSites[0].id);
+      return;
+    }
+    setSelectedId(null);
+    setDraft(emptyDraft);
+  }, [filteredSites, selectedId, sites]);
 
   const saveSeo = async (payload: SeoDraft = draft) => {
     if (!selected) return;
@@ -130,35 +382,33 @@ export default function AISEOManager() {
 
   const applyAi = () => {
     if (!aiPreview) return;
-    const next = {
-      ...draft,
-      seo_title: String(aiPreview.seo_title || draft.seo_title),
-      seo_description: String(aiPreview.seo_description || draft.seo_description),
-      seo_keywords: Array.isArray(aiPreview.seo_keywords)
-        ? aiPreview.seo_keywords.join(', ')
-        : String(aiPreview.seo_keywords || draft.seo_keywords),
-      seo_slug: String(aiPreview.seo_slug || draft.seo_slug),
-      seo_h1: String(aiPreview.seo_h1 || draft.seo_h1),
-      seo_og_title: String(aiPreview.seo_og_title || aiPreview.seo_title || draft.seo_og_title),
-      seo_og_description: String(aiPreview.seo_og_description || aiPreview.seo_description || draft.seo_og_description),
-      seo_score: Number(aiPreview.seo_score || draft.seo_score) || 0,
-    };
+    const next = { ...draft };
+    textKeys.forEach((key) => {
+      next[key] = stringifyPreviewValue(aiPreview[key], next[key]);
+    });
+    next.seo_og_title = stringifyPreviewValue(aiPreview.seo_og_title || aiPreview.seo_title, next.seo_og_title);
+    next.seo_og_description = stringifyPreviewValue(
+      aiPreview.seo_og_description || aiPreview.seo_description,
+      next.seo_og_description
+    );
+    next.seo_score = Number(aiPreview.seo_score || next.seo_score) || 0;
     setDraft(next);
   };
 
-  useEffect(() => {
-    if (!selected && filteredSites.length > 0) {
-      openSite(filteredSites[0].id);
-    }
-  }, [filteredSites, selected]);
-
   return (
     <div className="space-y-5">
-      <ModeSubTabs activeMode={activeMode} onModeChange={(mode) => {
-        setActiveMode(mode);
-        setSelectedId(null);
-        setAiPreview(null);
-      }} />
+      <ModeSubTabs
+        activeMode={activeMode}
+        onModeChange={(mode) => {
+          setActiveMode(mode);
+          setSelectedId(null);
+          setAiPreview(null);
+          setAiText('');
+          setCategoryFilter('all');
+        }}
+      />
+
+      <GlobalSeoPanel activeMode={activeMode} categories={categories} sites={sites} />
 
       <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-5">
         <div className="space-y-3">
@@ -179,16 +429,24 @@ export default function AISEOManager() {
             >
               <option value="all">전체</option>
               {categories.map((category) => (
-                <option key={category.id} value={category.name}>{category.name}</option>
+                <option key={category.id} value={category.name}>
+                  {category.name}
+                </option>
               ))}
             </select>
           </div>
 
           <div className="flex gap-2">
-            <button onClick={() => setMissingOnly(!missingOnly)} className={`px-3 py-1.5 rounded text-xs ${missingOnly ? 'bg-neon-orange text-white' : 'bg-obsidian-700 text-slate-400'}`}>
+            <button
+              onClick={() => setMissingOnly(!missingOnly)}
+              className={`px-3 py-1.5 rounded text-xs ${missingOnly ? 'bg-neon-orange text-white' : 'bg-obsidian-700 text-slate-400'}`}
+            >
               SEO 누락
             </button>
-            <button onClick={() => setLowScoreOnly(!lowScoreOnly)} className={`px-3 py-1.5 rounded text-xs ${lowScoreOnly ? 'bg-neon-orange text-white' : 'bg-obsidian-700 text-slate-400'}`}>
+            <button
+              onClick={() => setLowScoreOnly(!lowScoreOnly)}
+              className={`px-3 py-1.5 rounded text-xs ${lowScoreOnly ? 'bg-neon-orange text-white' : 'bg-obsidian-700 text-slate-400'}`}
+            >
               낮은 점수
             </button>
           </div>
@@ -226,58 +484,48 @@ export default function AISEOManager() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {[
-                ['seo_title', 'SEO 제목'],
-                ['seo_h1', 'H1 제목'],
-                ['seo_slug', 'SEO slug'],
-                ['seo_canonical', 'Canonical URL'],
-                ['seo_og_title', 'OG 제목'],
-                ['seo_og_image', 'OG 이미지'],
-              ].map(([key, label]) => (
-                <input
-                  key={key}
-                  value={String(draft[key as keyof SeoDraft] || '')}
-                  onChange={(e) => setDraft((current) => ({ ...current, [key]: e.target.value }))}
-                  placeholder={label}
-                  className="px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
-                />
+              {siteTextFields.map((field) => (
+                <label key={field.key} className={field.multiline ? 'sm:col-span-2 space-y-1' : 'space-y-1'}>
+                  <span className="text-[11px] text-slate-500">{field.label}</span>
+                  {field.multiline ? (
+                    <textarea
+                      value={draft[field.key]}
+                      onChange={(e) => setDraft((current) => ({ ...current, [field.key]: e.target.value }))}
+                      rows={field.key === 'seo_description' ? 3 : 2}
+                      className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange resize-none"
+                    />
+                  ) : (
+                    <input
+                      value={draft[field.key]}
+                      onChange={(e) => setDraft((current) => ({ ...current, [field.key]: e.target.value }))}
+                      className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
+                    />
+                  )}
+                </label>
               ))}
             </div>
 
-            <textarea
-              value={draft.seo_description}
-              onChange={(e) => setDraft((current) => ({ ...current, seo_description: e.target.value }))}
-              rows={3}
-              placeholder="메타 설명"
-              className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange resize-none"
-            />
-            <textarea
-              value={draft.seo_keywords}
-              onChange={(e) => setDraft((current) => ({ ...current, seo_keywords: e.target.value }))}
-              rows={2}
-              placeholder="키워드"
-              className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange resize-none"
-            />
-            <textarea
-              value={draft.seo_og_description}
-              onChange={(e) => setDraft((current) => ({ ...current, seo_og_description: e.target.value }))}
-              rows={2}
-              placeholder="OG 설명"
-              className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange resize-none"
-            />
-            <input
-              type="number"
-              value={draft.seo_score}
-              onChange={(e) => setDraft((current) => ({ ...current, seo_score: Number(e.target.value) }))}
-              placeholder="SEO 점수"
-              className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
-            />
+            <label className="space-y-1 block">
+              <span className="text-[11px] text-slate-500">SEO 점수</span>
+              <input
+                type="number"
+                value={draft.seo_score}
+                onChange={(e) => setDraft((current) => ({ ...current, seo_score: Number(e.target.value) }))}
+                min={0}
+                max={100}
+                className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
+              />
+            </label>
 
             <div className="flex flex-wrap gap-2">
               <button onClick={() => void saveSeo()} className="px-4 py-2 bg-neon-orange text-white text-xs font-semibold rounded-lg">
                 저장
               </button>
-              <button onClick={() => void generateSeo()} disabled={loadingAi} className="px-4 py-2 bg-obsidian-700 border border-obsidian-500 text-slate-200 text-xs font-semibold rounded-lg flex items-center gap-1.5 disabled:opacity-60">
+              <button
+                onClick={() => void generateSeo()}
+                disabled={loadingAi}
+                className="px-4 py-2 bg-obsidian-700 border border-obsidian-500 text-slate-200 text-xs font-semibold rounded-lg flex items-center gap-1.5 disabled:opacity-60"
+              >
                 {loadingAi ? <span className="animate-spin w-3 h-3 border-2 border-white/30 border-t-white rounded-full" /> : <Wand2 size={13} />}
                 AI SEO 생성
               </button>
@@ -297,11 +545,9 @@ export default function AISEOManager() {
                 <div className="flex items-center gap-2 text-xs font-semibold text-neon-orange">
                   <Bot size={14} /> AI 미리보기
                 </div>
-                {aiPreview ? (
-                  <pre className="text-xs text-slate-300 whitespace-pre-wrap">{JSON.stringify(aiPreview, null, 2)}</pre>
-                ) : (
-                  <pre className="text-xs text-slate-300 whitespace-pre-wrap">{aiText}</pre>
-                )}
+                <pre className="text-xs text-slate-300 whitespace-pre-wrap max-h-64 overflow-y-auto">
+                  {aiPreview ? JSON.stringify(aiPreview, null, 2) : aiText}
+                </pre>
                 {aiPreview && (
                   <button onClick={applyAi} className="px-3 py-1.5 bg-neon-orange text-white text-xs rounded">
                     적용

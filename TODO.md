@@ -16,6 +16,7 @@
 - [x] Connect Google SiteKit settings UI/API.
 - [x] Add site-level SEO fields and DB editing.
 - [x] Add AI SEO Center.
+- [x] Add mode-aware Global SEO settings for the homepage.
 - [x] Connect bridge ads settings.
 - [ ] Harden admin authentication and persist admin account settings on the server.
 - [ ] Encrypt stored secret settings at rest.
