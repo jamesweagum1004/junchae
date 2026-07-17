@@ -59,6 +59,17 @@ const siteColumns = [
   'status',
   'category',
   'description',
+  'seo_title',
+  'seo_description',
+  'seo_keywords',
+  'seo_slug',
+  'seo_h1',
+  'seo_canonical',
+  'seo_og_title',
+  'seo_og_description',
+  'seo_og_image',
+  'seo_score',
+  'seo_updated_at',
   'sort_order',
   'created_at',
   'updated_at',
@@ -92,6 +103,19 @@ const adColumns = [
   'updated_at',
 ];
 
+const seoColumns = [
+  'seo_title',
+  'seo_description',
+  'seo_keywords',
+  'seo_slug',
+  'seo_h1',
+  'seo_canonical',
+  'seo_og_title',
+  'seo_og_description',
+  'seo_og_image',
+  'seo_score',
+];
+
 const editableSiteColumns = [
   'mode',
   'name',
@@ -101,6 +125,7 @@ const editableSiteColumns = [
   'logo',
   'status',
   'sort_order',
+  ...seoColumns,
 ];
 
 const editableAdColumns = [
@@ -232,6 +257,33 @@ function normalizeDate(value) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? value.trim() : null;
 }
 
+function normalizeSafeKey(value, fallback = '') {
+  const text = normalizeOptionalText(value);
+  if (!text || !/^[a-zA-Z0-9_-]+$/.test(text)) return fallback;
+  return text;
+}
+
+function normalizeSeoScore(value) {
+  const score = Number(value);
+  if (!Number.isFinite(score)) return 0;
+  return Math.max(0, Math.min(100, Math.trunc(score)));
+}
+
+function slugify(value) {
+  return normalizeOptionalText(value)
+    ?.toLowerCase()
+    .replace(/[^a-z0-9가-힣]+/gi, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 255) || 'site';
+}
+
+function maskSecret(value) {
+  const text = normalizeOptionalText(value);
+  if (!text) return '';
+  if (text.length <= 8) return '••••••••';
+  return `${text.slice(0, 3)}-••••••••••••${text.slice(-4)}`;
+}
+
 function normalizeSiteInput(body) {
   return {
     mode: normalizeMode(body.mode),
@@ -253,6 +305,8 @@ function pickEditableSiteUpdates(body) {
 
     if (column === 'sort_order') {
       updates[column] = normalizeSortOrder(body[column]);
+    } else if (column === 'seo_score') {
+      updates[column] = normalizeSeoScore(body[column]);
     } else if (column === 'mode') {
       updates[column] = normalizeMode(body[column]);
     } else if (column === 'name' || column === 'url') {
@@ -363,6 +417,17 @@ async function ensureColumn(tableName, columnName, definition, afterColumn) {
 
 async function initializeDatabase() {
   await ensureColumn('sites', 'mode', "VARCHAR(50) NOT NULL DEFAULT 'normal'", 'id');
+  await ensureColumn('sites', 'seo_title', 'VARCHAR(255) NULL', 'description');
+  await ensureColumn('sites', 'seo_description', 'TEXT NULL', 'seo_title');
+  await ensureColumn('sites', 'seo_keywords', 'TEXT NULL', 'seo_description');
+  await ensureColumn('sites', 'seo_slug', 'VARCHAR(255) NULL', 'seo_keywords');
+  await ensureColumn('sites', 'seo_h1', 'VARCHAR(255) NULL', 'seo_slug');
+  await ensureColumn('sites', 'seo_canonical', 'VARCHAR(500) NULL', 'seo_h1');
+  await ensureColumn('sites', 'seo_og_title', 'VARCHAR(255) NULL', 'seo_canonical');
+  await ensureColumn('sites', 'seo_og_description', 'TEXT NULL', 'seo_og_title');
+  await ensureColumn('sites', 'seo_og_image', 'VARCHAR(500) NULL', 'seo_og_description');
+  await ensureColumn('sites', 'seo_score', 'INT NOT NULL DEFAULT 0', 'seo_og_image');
+  await ensureColumn('sites', 'seo_updated_at', 'TIMESTAMP NULL', 'seo_score');
   await db.execute("UPDATE sites SET mode = 'normal' WHERE mode IS NULL OR mode = ''");
 
   await db.execute(`
@@ -399,6 +464,20 @@ async function initializeDatabase() {
   `);
 
   await db.execute(`
+    CREATE TABLE IF NOT EXISTS app_settings (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      mode VARCHAR(50) NOT NULL DEFAULT 'normal',
+      section VARCHAR(100) NOT NULL,
+      setting_key VARCHAR(100) NOT NULL,
+      setting_value LONGTEXT NULL,
+      is_secret TINYINT(1) NOT NULL DEFAULT 0,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      UNIQUE KEY unique_setting (mode, section, setting_key)
+    )
+  `);
+
+  await db.execute(`
     INSERT IGNORE INTO categories (name, mode, sort_order)
     SELECT DISTINCT category, mode, 0
     FROM sites
@@ -409,6 +488,160 @@ async function initializeDatabase() {
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, data: { status: 'healthy' } });
 });
+
+async function getSettings(mode, section, includeSecrets = false) {
+  const [rows] = await db.execute(
+    `SELECT setting_key, setting_value, is_secret
+     FROM app_settings
+     WHERE mode = ? AND section = ?
+     ORDER BY setting_key ASC`,
+    [mode, section]
+  );
+
+  return rows.reduce((acc, row) => {
+    acc[row.setting_key] = row.is_secret && !includeSecrets
+      ? maskSecret(row.setting_value)
+      : row.setting_value || '';
+    return acc;
+  }, {});
+}
+
+async function getSettingValue(mode, section, key) {
+  const [rows] = await db.execute(
+    `SELECT setting_value
+     FROM app_settings
+     WHERE mode = ? AND section = ? AND setting_key = ?
+     LIMIT 1`,
+    [mode, section, key]
+  );
+  return rows[0]?.setting_value || '';
+}
+
+async function saveSettings(mode, section, settings, secretKeys = []) {
+  const entries = Object.entries(settings || {});
+  for (const [rawKey, rawValue] of entries) {
+    const settingKey = normalizeSafeKey(rawKey);
+    if (!settingKey) continue;
+
+    const value = rawValue === null || rawValue === undefined ? '' : String(rawValue);
+    const isSecret = secretKeys.includes(settingKey) ? 1 : 0;
+
+    if (isSecret && !value.trim()) continue;
+    if (isSecret && value.includes('••••')) continue;
+
+    await db.execute(
+      `INSERT INTO app_settings (mode, section, setting_key, setting_value, is_secret)
+       VALUES (?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         setting_value = VALUES(setting_value),
+         is_secret = VALUES(is_secret)`,
+      [mode, section, settingKey, value, isSecret]
+    );
+  }
+}
+
+function formatSeo(site) {
+  return {
+    id: site.id,
+    seo_title: site.seo_title || `${site.name} 최신 정보`,
+    seo_description: site.seo_description || site.description || `${site.name} 사이트 정보와 접속 링크를 확인하세요.`,
+    seo_keywords: site.seo_keywords || site.name,
+    seo_slug: site.seo_slug || slugify(site.name),
+    seo_h1: site.seo_h1 || site.name,
+    seo_canonical: site.seo_canonical || site.url,
+    seo_og_title: site.seo_og_title || site.seo_title || `${site.name} 최신 정보`,
+    seo_og_description: site.seo_og_description || site.seo_description || site.description || '',
+    seo_og_image: site.seo_og_image || site.logo || '',
+    seo_score: Number(site.seo_score) || 0,
+    seo_updated_at: site.seo_updated_at || null,
+  };
+}
+
+async function getDeepSeekConfig(mode) {
+  const apiKey =
+    (await getSettingValue(mode, 'deepseek', 'api_key')) ||
+    process.env.DEEPSEEK_API_KEY ||
+    '';
+  const model =
+    (await getSettingValue(mode, 'deepseek', 'model')) ||
+    process.env.DEEPSEEK_MODEL ||
+    'deepseek-chat';
+  const promptTemplate =
+    (await getSettingValue(mode, 'deepseek', 'prompt_template')) ||
+    '다음 사이트의 검색 친화적인 한국어 SEO 데이터를 JSON으로 생성하세요.';
+  return { apiKey, model, promptTemplate };
+}
+
+async function callDeepSeek({ mode, messages }) {
+  const { apiKey, model } = await getDeepSeekConfig(mode);
+  if (!apiKey) {
+    const err = new Error('DeepSeek API key is not configured');
+    err.status = 400;
+    err.code = 'DEEPSEEK_API_KEY_MISSING';
+    throw err;
+  }
+
+  const response = await fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.7,
+    }),
+  });
+  const body = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    const err = new Error(body?.error?.message || body?.message || 'DeepSeek request failed.');
+    err.status = response.status;
+    err.code = 'DEEPSEEK_REQUEST_FAILED';
+    err.body = body;
+    throw err;
+  }
+
+  return body?.choices?.[0]?.message?.content || '';
+}
+
+function parseJsonFromText(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[0]);
+    } catch {
+      return null;
+    }
+  }
+}
+
+app.get('/api/settings', asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.query.mode);
+  const section = normalizeSafeKey(req.query.section);
+  if (!section) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'section is required.');
+  }
+  const settings = await getSettings(mode, section, false);
+  return res.json({ ok: true, data: settings });
+}));
+
+app.post('/api/settings', asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.body?.mode);
+  const section = normalizeSafeKey(req.body?.section);
+  if (!section) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'section is required.');
+  }
+
+  const secretKeys = section === 'deepseek' ? ['api_key'] : [];
+  await saveSettings(mode, section, req.body?.settings || {}, secretKeys);
+  const settings = await getSettings(mode, section, false);
+  return res.json({ ok: true, data: settings });
+}));
 
 app.get('/api/sites', asyncRoute(async (req, res) => {
   const values = [];
@@ -423,6 +656,111 @@ app.get('/api/sites', asyncRoute(async (req, res) => {
     values
   );
   res.json({ ok: true, data: rows });
+}));
+
+app.get('/api/sites/:id/seo', asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const site = await getSiteById(id);
+  if (!site) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+
+  return res.json({ ok: true, data: formatSeo(site) });
+}));
+
+app.patch('/api/sites/:id/seo', asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const updates = {};
+  seoColumns.forEach((column) => {
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, column)) return;
+    updates[column] = column === 'seo_score'
+      ? normalizeSeoScore(req.body[column])
+      : normalizeOptionalText(req.body[column]);
+  });
+  updates.seo_updated_at = new Date();
+
+  const entries = Object.entries(updates);
+  const setClause = entries.map(([column]) => `${column} = ?`).join(', ');
+  const values = entries.map(([, value]) => value);
+  values.push(id);
+
+  const [result] = await db.execute(`UPDATE sites SET ${setClause} WHERE id = ?`, values);
+  if (result.affectedRows === 0) {
+    return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+  }
+
+  const updated = await getSiteById(id);
+  return res.json({ ok: true, data: formatSeo(updated) });
+}));
+
+app.post('/api/deepseek/test', asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.body?.mode);
+  const site = req.body?.site || {};
+  const { promptTemplate } = await getDeepSeekConfig(mode);
+
+  try {
+    const content = await callDeepSeek({
+      mode,
+      messages: [
+        { role: 'system', content: 'You are a Korean SEO assistant. Do not reveal secrets.' },
+        {
+          role: 'user',
+          content: `${promptTemplate}\n\n사이트명: ${site.name || ''}\nURL: ${site.url || ''}\n카테고리: ${site.category || ''}\n설명: ${site.description || ''}`,
+        },
+      ],
+    });
+    return res.json({ ok: true, data: { text: content } });
+  } catch (err) {
+    console.error('DeepSeek test error:', { code: err.code, status: err.status, message: err.message, body: err.body });
+    return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', err.message);
+  }
+}));
+
+app.post('/api/deepseek/generate-seo', asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.body?.mode);
+  const siteId = parseId(req.body?.site_id);
+  if (!siteId) return jsonError(res, 400, 'INVALID_ID', 'site_id is required.');
+
+  const site = await getSiteById(siteId);
+  if (!site) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+
+  const { promptTemplate } = await getDeepSeekConfig(mode);
+  const options = req.body?.options || {};
+  const prompt = `
+${promptTemplate}
+
+아래 사이트의 SEO 데이터를 한국어 JSON으로 생성하세요.
+반드시 JSON만 출력하세요.
+
+사이트명: ${site.name}
+URL: ${site.url}
+카테고리: ${site.category || ''}
+설명: ${site.description || ''}
+톤: ${options.tone || '검색친화적이고 클릭을 유도하는 한국어'}
+대상 국가: ${options.target_country || 'KR'}
+대상 언어: ${options.target_language || 'ko'}
+
+JSON 필드:
+seo_title, seo_description, seo_keywords 배열, seo_slug, seo_h1,
+seo_og_title, seo_og_description, seo_score 숫자, recommendations 배열
+`;
+
+  try {
+    const text = await callDeepSeek({
+      mode,
+      messages: [
+        { role: 'system', content: 'You are a Korean SEO expert. Return valid JSON only.' },
+        { role: 'user', content: prompt },
+      ],
+    });
+    const parsed = parseJsonFromText(text);
+    return res.json({ ok: true, data: { text, json: parsed } });
+  } catch (err) {
+    console.error('DeepSeek SEO generation error:', { code: err.code, status: err.status, message: err.message, body: err.body });
+    return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', err.message);
+  }
 }));
 
 app.get('/api/categories', asyncRoute(async (req, res) => {

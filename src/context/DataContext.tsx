@@ -143,6 +143,17 @@ const mapSite = (row: ApiRow, fallbackIndex: number): Site => ({
   logo: toStringValue(row.logo, '/uploads/logos/default.png'),
   status: isSiteStatus(row.status) ? row.status : 'normal',
   description: toStringValue(row.description),
+  seo_title: toStringValue(row.seo_title),
+  seo_description: toStringValue(row.seo_description),
+  seo_keywords: toStringValue(row.seo_keywords),
+  seo_slug: toStringValue(row.seo_slug),
+  seo_h1: toStringValue(row.seo_h1),
+  seo_canonical: toStringValue(row.seo_canonical),
+  seo_og_title: toStringValue(row.seo_og_title),
+  seo_og_description: toStringValue(row.seo_og_description),
+  seo_og_image: toStringValue(row.seo_og_image),
+  seo_score: Number(row.seo_score) || 0,
+  seo_updated_at: toStringValue(row.seo_updated_at) || null,
 });
 
 const mapAd = (row: ApiRow): Ad => ({

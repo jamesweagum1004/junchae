@@ -1,34 +1,71 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Key, Cpu, Play, CheckCircle } from 'lucide-react';
 import ModeSubTabs from '../ModeSubTabs';
+import { apiJson, apiMode, loadSettings, saveSettings } from '../../lib/adminApi';
+
+const defaultPrompt = '다음 사이트의 검색 친화적인 한국어 SEO 제목, 메타 설명, 키워드를 생성하세요.';
 
 export default function DeepSeekSettings() {
   const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('standard');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('deepseek-chat');
-  const [prompt, setPrompt] = useState('다음 사이트의 SEO 최적화된 제목과 메타 설명을 생성해주세요: ');
+  const [prompt, setPrompt] = useState(defaultPrompt);
   const [result, setResult] = useState('');
   const [testing, setTesting] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const testApi = () => {
+  useEffect(() => {
+    loadSettings(activeMode, 'deepseek')
+      .then((settings) => {
+        setApiKey(settings.api_key || '');
+        setModel(settings.model || 'deepseek-chat');
+        setPrompt(settings.prompt_template || defaultPrompt);
+      })
+      .catch((err) => console.error('DeepSeek 설정 로드 실패', err));
+  }, [activeMode]);
+
+  const testApi = async () => {
     setTesting(true);
     setResult('');
-    setTimeout(() => {
+    try {
+      const data = await apiJson<{ text: string }>('/api/deepseek/test', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode: apiMode(activeMode),
+          site: {
+            name: '네이버',
+            url: 'https://naver.com',
+            category: '포털',
+            description: '검색 포털 테스트 사이트',
+          },
+        }),
+      });
+      setResult(data.text);
+    } catch (err) {
+      console.error('DeepSeek 테스트 실패', err);
+      setResult(err instanceof Error ? err.message : 'DeepSeek 테스트에 실패했습니다.');
+    } finally {
       setTesting(false);
-      const modeLabel = activeMode === 'secure' ? '안전 접속 모드' : '일반 모드';
-      setResult(
-        `[DeepSeek ${model}] 응답 테스트 완료 (${modeLabel})\n\n` +
-        `SEO 제목: "2025년 최신 링크 모음 | 전체닷컴 — ${modeLabel} 최적화"\n` +
-        `메타 설명: "전체닷컴에서 ${activeMode === 'secure' ? '웹툰 대피소, 토렌트, 카지노 등' : '공식 웹툰, IT 커뮤니티, 스포츠 뉴스 등'} 엄선된 정예 사이트를 한눈에 확인하세요. AI 우회 브릿지 기술로 차단된 사이트도 즉시 접속 가능."\n\n` +
-        `[토큰 사용] input: 120 / output: 85 / total: 205`
-      );
-    }, 2000);
+    }
   };
 
-  const save = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+  const save = async () => {
+    try {
+      const settings: Record<string, string> = {
+        model,
+        prompt_template: prompt,
+      };
+      if (apiKey.trim() && !apiKey.includes('••••')) {
+        settings.api_key = apiKey.trim();
+      }
+      const savedSettings = await saveSettings(activeMode, 'deepseek', settings);
+      setApiKey(savedSettings.api_key || apiKey);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      console.error('DeepSeek 설정 저장 실패', err);
+      alert('DeepSeek 설정 저장에 실패했습니다.');
+    }
   };
 
   return (
@@ -44,7 +81,7 @@ export default function DeepSeekSettings() {
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder="sk-••••••••••••••••••••••••••••"
+            placeholder="sk-..."
             className="w-full px-3 py-2.5 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange font-mono"
           />
         </div>
@@ -58,34 +95,33 @@ export default function DeepSeekSettings() {
             onChange={(e) => setModel(e.target.value)}
             className="w-full px-3 py-2.5 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
           >
-            <option value="deepseek-chat">deepseek-chat (일반)</option>
-            <option value="deepseek-coder">deepseek-coder (코드 특화)</option>
-            <option value="deepseek-reasoner">deepseek-reasoner (R1)</option>
+            <option value="deepseek-chat">deepseek-chat</option>
+            <option value="deepseek-reasoner">deepseek-reasoner</option>
           </select>
         </div>
 
         <div>
           <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wider">
-            pSEO 생성 프롬프트 템플릿
+            pSEO/SEO 생성 프롬프트 템플릿
           </label>
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            rows={3}
+            rows={4}
             className="w-full px-3 py-2.5 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange font-mono resize-none"
           />
         </div>
 
         <div className="flex gap-2">
           <button
-            onClick={save}
+            onClick={() => void save()}
             className="flex-1 py-2.5 bg-obsidian-700 border border-obsidian-500 hover:border-neon-orange/50 text-slate-300 text-sm font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors"
           >
             {saved ? <CheckCircle size={14} className="text-emerald-400" /> : null}
             {saved ? '저장됨' : '설정 저장'}
           </button>
           <button
-            onClick={testApi}
+            onClick={() => void testApi()}
             disabled={testing}
             className="flex-1 py-2.5 bg-neon-orange text-white text-sm font-semibold rounded-lg hover:bg-neon-orangeDark flex items-center justify-center gap-1.5 transition-colors disabled:opacity-60"
           >
@@ -99,7 +135,7 @@ export default function DeepSeekSettings() {
         <div className="p-4 bg-black/40 border border-neon-orange/20 rounded-xl">
           <div className="flex items-center gap-2 mb-2">
             <CheckCircle size={14} className="text-emerald-400" />
-            <span className="text-xs font-semibold text-emerald-400">API 응답 수신 완료</span>
+            <span className="text-xs font-semibold text-emerald-400">API 응답</span>
           </div>
           <pre className="text-xs text-slate-300 font-mono whitespace-pre-wrap leading-relaxed">{result}</pre>
         </div>

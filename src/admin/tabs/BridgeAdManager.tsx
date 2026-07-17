@@ -1,27 +1,48 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Code2, CheckCircle, AlertTriangle } from 'lucide-react';
 import ModeSubTabs from '../ModeSubTabs';
+import { loadSettings, saveSettings } from '../../lib/adminApi';
 
 const SLOT_TYPES = [
-  { id: 'popunder', label: 'ExoClick 팝언더', description: '브릿지 오버레이 종료 시 발화' },
-  { id: 'banner_top', label: '상단 배너 (728×90)', description: '브릿지 오버레이 상단 고정' },
-  { id: 'interstitial', label: '전면 광고 (전환 전)', description: '타겟 URL 열리기 직전' },
-  { id: 'native', label: '네이티브 광고', description: '로그 섹션 내 삽입' },
+  { id: 'popunder', label: 'ExoClick 팝언더', description: '브릿지 오버레이 종료 후 제한적으로 사용' },
+  { id: 'banner_728', label: '상단 배너 728x90', description: '브릿지 오버레이 상단 배너 슬롯' },
+  { id: 'interstitial', label: '전면 광고', description: '목적 URL 이동 직전 전면 광고 슬롯' },
+  { id: 'native', label: '네이티브 광고', description: '브릿지 안내 영역 내부 광고 슬롯' },
 ];
 
 export default function BridgeAdManager() {
   const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('secure');
   const [scripts, setScripts] = useState<Record<string, string>>(
-    Object.fromEntries(SLOT_TYPES.map((s) => [s.id, '']))
+    Object.fromEntries(SLOT_TYPES.map((slot) => [slot.id, '']))
   );
   const [enabled, setEnabled] = useState<Record<string, boolean>>(
-    Object.fromEntries(SLOT_TYPES.map((s) => [s.id, false]))
+    Object.fromEntries(SLOT_TYPES.map((slot) => [slot.id, false]))
   );
   const [saved, setSaved] = useState(false);
 
-  const save = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2500);
+  useEffect(() => {
+    loadSettings(activeMode, 'bridge_ads')
+      .then((settings) => {
+        setScripts(Object.fromEntries(SLOT_TYPES.map((slot) => [slot.id, settings[`${slot.id}_script`] || ''])));
+        setEnabled(Object.fromEntries(SLOT_TYPES.map((slot) => [slot.id, settings[`${slot.id}_enabled`] === 'true'])));
+      })
+      .catch((err) => console.error('브릿지 광고 설정 로드 실패', err));
+  }, [activeMode]);
+
+  const save = async () => {
+    try {
+      const settings: Record<string, string> = {};
+      SLOT_TYPES.forEach((slot) => {
+        settings[`${slot.id}_enabled`] = String(Boolean(enabled[slot.id]));
+        settings[`${slot.id}_script`] = scripts[slot.id] || '';
+      });
+      await saveSettings(activeMode, 'bridge_ads', settings);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } catch (err) {
+      console.error('브릿지 광고 설정 저장 실패', err);
+      alert('브릿지 광고 설정 저장에 실패했습니다.');
+    }
   };
 
   return (
@@ -31,7 +52,7 @@ export default function BridgeAdManager() {
       <div className="flex items-start gap-3 p-4 bg-amber-500/5 border border-amber-500/20 rounded-xl">
         <AlertTriangle size={14} className="text-amber-400 flex-shrink-0 mt-0.5" />
         <p className="text-xs text-amber-400/80 leading-relaxed">
-          브릿지 페이지(AI 로딩 오버레이) 전용 광고 슬롯입니다. 코드 삽입 후 테스트 환경에서 반드시 확인하세요.
+          브릿지 광고 스크립트는 저장만 하며, 메인 페이지에 무분별하게 실행하지 않습니다.
         </p>
       </div>
 
@@ -64,20 +85,15 @@ export default function BridgeAdManager() {
               rows={4}
               value={scripts[slot.id]}
               onChange={(e) => setScripts((prev) => ({ ...prev, [slot.id]: e.target.value }))}
-              placeholder={`<!-- ${slot.label} 광고 스크립트 코드 -->\n<script type="text/javascript">\n  ...\n</script>`}
-              disabled={!enabled[slot.id]}
-              className={`w-full px-3 py-2 text-xs border rounded-lg font-mono resize-none focus:outline-none transition-colors ${
-                enabled[slot.id]
-                  ? 'bg-obsidian-700 border-obsidian-500 text-slate-300 placeholder-slate-700 focus:border-neon-orange'
-                  : 'bg-obsidian-700/50 border-obsidian-600 text-slate-600 placeholder-slate-700 cursor-not-allowed'
-              }`}
+              placeholder={`<!-- ${slot.label} 광고 스크립트 -->`}
+              className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-slate-300 placeholder-slate-700 focus:outline-none focus:border-neon-orange font-mono resize-none"
             />
           </div>
         </div>
       ))}
 
       <button
-        onClick={save}
+        onClick={() => void save()}
         className="w-full py-2.5 bg-neon-orange text-white text-sm font-semibold rounded-lg hover:bg-neon-orangeDark flex items-center justify-center gap-2 transition-colors"
       >
         {saved ? <CheckCircle size={14} /> : null}

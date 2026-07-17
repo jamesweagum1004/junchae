@@ -10,7 +10,18 @@
 - [x] Add ads DB table/API and migrate banner ad management to DB CRUD.
 - [x] Add infeed ads DB CRUD using `ads.placement = 'infeed'`.
 - [x] Add real ad image upload endpoint for `/uploads/ads`.
+- [x] Add mode-aware settings storage with `app_settings`.
+- [x] Connect DeepSeek settings UI/API.
+- [x] Add DeepSeek SEO generation API.
+- [x] Connect Google SiteKit settings UI/API.
+- [x] Add site-level SEO fields and DB editing.
+- [x] Add AI SEO Center.
+- [x] Connect bridge ads settings.
 - [ ] Harden admin authentication and persist admin account settings on the server.
+- [ ] Encrypt stored secret settings at rest.
+- [ ] Add SSR or static SEO page generation for stronger per-page indexing.
+- [ ] Add automatic `sitemap.xml` generation.
+- [ ] Add `robots.txt` management.
 - [ ] Add deployment automation.
 - [ ] Add backup automation.
 - [ ] Define and document ad script security policy.

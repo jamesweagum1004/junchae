@@ -5,6 +5,7 @@ import { AdminAuthProvider, useAdminAuth } from './context/AdminAuthContext';
 import MainPage from './pages/MainPage';
 import AdminPage from './pages/AdminPage';
 import NotFoundPage from './pages/NotFoundPage';
+import SeoHeadManager from './components/SeoHeadManager';
 
 function DynamicRouter() {
   const location = useLocation();
@@ -22,6 +23,7 @@ export default function App() {
       <DataProvider>
         <AdminAuthProvider>
           <BrowserRouter>
+            <SeoHeadManager />
             <Routes>
               <Route path="/*" element={<DynamicRouter />} />
             </Routes>

@@ -9,6 +9,17 @@ export interface Site {
   logo: string;
   status: SiteStatus;
   description: string;
+  seo_title?: string;
+  seo_description?: string;
+  seo_keywords?: string;
+  seo_slug?: string;
+  seo_h1?: string;
+  seo_canonical?: string;
+  seo_og_title?: string;
+  seo_og_description?: string;
+  seo_og_image?: string;
+  seo_score?: number;
+  seo_updated_at?: string | null;
 }
 
 export interface Category {
