@@ -2,8 +2,12 @@
 
 - [x] Implement sites CRUD API and admin save flow for the existing `sites` table.
 - [x] Add real logo upload endpoint and admin save flow for site logos.
-- [ ] Add real ad image upload endpoints with multer or equivalent storage handling.
-- [ ] Add a categories table and migrate category management from local React state.
-- [ ] Add ads and inter-category ads tables and migrate ad management from local React state.
+- [x] Fix logo display CSS so uploaded logos render fully inside logo boxes.
+- [x] Add categories DB table/API and migrate category management to DB CRUD.
+- [x] Add ads DB table/API and migrate banner ad management to DB CRUD.
+- [x] Add infeed ads DB CRUD using `ads.placement = 'infeed'`.
+- [x] Add real ad image upload endpoint for `/uploads/ads`.
 - [ ] Harden admin authentication and persist admin account settings on the server.
-- [ ] Add deployment-specific `/api` proxy or backend routing so Apache does not serve API source files directly.
+- [ ] Add deployment automation.
+- [ ] Add backup automation.
+- [ ] Define and document ad script security policy.

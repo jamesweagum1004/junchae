@@ -42,8 +42,12 @@ export default function SiteManager() {
 
   const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('standard');
   const { categories } = getModeData(activeMode);
-  const allSites: (Site & { categoryId: string; categoryName: string })[] = categories.flatMap((c) =>
-    (Array.isArray(c.sites) ? c.sites : []).map((s) => ({ ...s, categoryId: c.id, categoryName: c.name }))
+  const allSites: (Site & { categoryId: string; categoryName: string })[] = categories.flatMap((category) =>
+    (Array.isArray(category.sites) ? category.sites : []).map((site) => ({
+      ...site,
+      categoryId: category.id,
+      categoryName: category.name,
+    }))
   );
 
   const [form, setForm] = useState({
@@ -127,10 +131,6 @@ export default function SiteManager() {
     }
   };
 
-  const chooseLogoForNewSite = () => {
-    newSiteFileInputRef.current?.click();
-  };
-
   const handleNewSiteLogoFile = async (file: File | undefined) => {
     if (!file) return;
     setLogoUploading(true);
@@ -146,7 +146,7 @@ export default function SiteManager() {
   };
 
   const toggleStatus = async (id: number) => {
-    const site = allSites.find((s) => s.id === id);
+    const site = allSites.find((item) => item.id === id);
     if (!site) return;
 
     try {
@@ -199,7 +199,7 @@ export default function SiteManager() {
   const onFileDrop = async (e: React.DragEvent, siteId: number) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    await saveUploadedLogo(siteId, file);
+    if (file) await saveUploadedLogo(siteId, file);
   };
 
   const startEditUrl = (id: number, url: string) => {
@@ -247,38 +247,38 @@ export default function SiteManager() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-4 bg-obsidian-600 rounded-xl border border-obsidian-500">
         <input
           value={form.name}
-          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+          onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))}
           placeholder="사이트명"
           className="px-3 py-2 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange"
         />
         <input
           value={form.url}
-          onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
+          onChange={(e) => setForm((current) => ({ ...current, url: e.target.value }))}
           placeholder="이동 URL"
           className="px-3 py-2 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange"
         />
         <select
           value={form.categoryId}
-          onChange={(e) => setForm((f) => ({ ...f, categoryId: e.target.value }))}
+          onChange={(e) => setForm((current) => ({ ...current, categoryId: e.target.value }))}
           className="px-3 py-2 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
         >
           <option value="">카테고리 선택</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
+          {categories.map((category) => (
+            <option key={category.id} value={category.id}>
+              {category.name}
             </option>
           ))}
         </select>
         <input
           value={form.description}
-          onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
+          onChange={(e) => setForm((current) => ({ ...current, description: e.target.value }))}
           placeholder="설명"
           className="px-3 py-2 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange"
         />
         <div className="col-span-2 sm:col-span-4 flex gap-2">
           <input
             value={form.logo}
-            onChange={(e) => setForm((f) => ({ ...f, logo: e.target.value }))}
+            onChange={(e) => setForm((current) => ({ ...current, logo: e.target.value }))}
             placeholder="/uploads/logos/logo.png"
             className="flex-1 px-3 py-2 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange font-mono"
           />
@@ -287,11 +287,11 @@ export default function SiteManager() {
             type="file"
             accept="image/jpeg,image/png,image/webp,image/x-icon,.ico"
             className="hidden"
-            onChange={(e) => handleNewSiteLogoFile(e.target.files?.[0])}
+            onChange={(e) => void handleNewSiteLogoFile(e.target.files?.[0])}
           />
           <button
             type="button"
-            onClick={chooseLogoForNewSite}
+            onClick={() => newSiteFileInputRef.current?.click()}
             disabled={logoUploading}
             className="px-3 py-2 bg-obsidian-700 border border-obsidian-500 text-slate-300 text-sm font-semibold rounded-lg hover:border-neon-orange/50 flex items-center gap-1.5 transition-colors disabled:opacity-50"
           >
@@ -299,7 +299,7 @@ export default function SiteManager() {
           </button>
         </div>
         <button
-          onClick={add}
+          onClick={() => void add()}
           className="col-span-2 sm:col-span-4 py-2 bg-neon-orange text-white text-sm font-semibold rounded-lg hover:bg-neon-orangeDark flex items-center justify-center gap-1.5 transition-colors"
         >
           <Plus size={14} /> 사이트 추가
@@ -310,9 +310,9 @@ export default function SiteManager() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-obsidian-500 bg-obsidian-600">
-              {['로고', '사이트명', '카테고리', '이동 URL', '상태', '로고', ''].map((h) => (
-                <th key={h} className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
-                  {h}
+              {['로고', '사이트명', '카테고리', '이동 URL', '상태', '로고', ''].map((header) => (
+                <th key={header} className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
+                  {header}
                 </th>
               ))}
             </tr>
@@ -321,22 +321,22 @@ export default function SiteManager() {
             {allSites.map((site) => (
               <tr key={site.id} className="border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors">
                 <td className="px-3 py-2.5">
-                  <div className="w-6 h-6 rounded bg-obsidian-700 border border-obsidian-500 flex items-center justify-center overflow-hidden">
+                  <div className="w-8 h-8 rounded bg-white/90 border border-obsidian-500 flex items-center justify-center overflow-hidden p-1">
                     {site.logo ? (
                       <img
                         src={site.logo}
                         alt=""
-                        className="w-4 h-4 object-contain"
+                        className="w-full h-full object-contain"
                         onError={(e) => {
                           const img = e.target as HTMLImageElement;
                           img.style.display = 'none';
                           if (img.parentElement) {
-                            img.parentElement.innerHTML = `<span class="text-[9px] font-bold text-neon-orange">${site.name[0] || '?'}</span>`;
+                            img.parentElement.innerHTML = `<span class="text-[10px] font-bold text-neon-orange">${site.name[0] || '?'}</span>`;
                           }
                         }}
                       />
                     ) : (
-                      <span className="text-[9px] font-bold text-neon-orange">{site.name[0] || '?'}</span>
+                      <span className="text-[10px] font-bold text-neon-orange">{site.name[0] || '?'}</span>
                     )}
                   </div>
                 </td>
@@ -346,11 +346,13 @@ export default function SiteManager() {
                       <input
                         value={editingNameValue}
                         onChange={(e) => setEditingNameValue(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && saveName()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void saveName();
+                        }}
                         autoFocus
                         className="w-28 px-2 py-1 text-xs bg-obsidian-700 border border-neon-orange/50 rounded text-white focus:outline-none"
                       />
-                      <button onClick={saveName} className="text-emerald-400 hover:text-emerald-300">
+                      <button onClick={() => void saveName()} className="text-emerald-400 hover:text-emerald-300">
                         <Check size={12} />
                       </button>
                     </div>
@@ -373,11 +375,13 @@ export default function SiteManager() {
                       <input
                         value={editingUrlValue}
                         onChange={(e) => setEditingUrlValue(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && saveUrl()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void saveUrl();
+                        }}
                         autoFocus
                         className="w-full min-w-[140px] px-2 py-1 text-xs bg-obsidian-700 border border-neon-orange/50 rounded text-white focus:outline-none font-mono"
                       />
-                      <button onClick={saveUrl} className="text-emerald-400 hover:text-emerald-300 flex-shrink-0">
+                      <button onClick={() => void saveUrl()} className="text-emerald-400 hover:text-emerald-300 flex-shrink-0">
                         <Check size={12} />
                       </button>
                     </div>
@@ -403,7 +407,7 @@ export default function SiteManager() {
                 </td>
                 <td className="px-3 py-2.5">
                   <button
-                    onClick={() => toggleStatus(site.id)}
+                    onClick={() => void toggleStatus(site.id)}
                     className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${
                       site.status === 'normal'
                         ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
@@ -412,7 +416,7 @@ export default function SiteManager() {
                           : 'bg-red-500/10 text-red-400 border-red-500/30'
                     }`}
                   >
-                    {statusOptions.find((s) => s.value === site.status)?.label}
+                    {statusOptions.find((option) => option.value === site.status)?.label}
                   </button>
                 </td>
                 <td className="px-3 py-2.5">
@@ -428,7 +432,7 @@ export default function SiteManager() {
                   </button>
                 </td>
                 <td className="px-3 py-2.5">
-                  <button onClick={() => remove(site.id)} className="text-slate-600 hover:text-red-400 transition-colors">
+                  <button onClick={() => void remove(site.id)} className="text-slate-600 hover:text-red-400 transition-colors">
                     <Trash2 size={14} />
                   </button>
                 </td>
@@ -445,7 +449,9 @@ export default function SiteManager() {
               <div className="flex items-center gap-3">
                 <h3 className="text-sm font-bold text-white">로고 이미지 변경</h3>
                 {activeLogoSite?.logo && (
-                  <img src={activeLogoSite.logo} alt="" className="w-7 h-7 object-contain rounded bg-obsidian-800 border border-obsidian-500" />
+                  <div className="w-9 h-9 rounded bg-white/90 border border-obsidian-500 flex items-center justify-center overflow-hidden p-1">
+                    <img src={activeLogoSite.logo} alt="" className="w-full h-full object-contain" />
+                  </div>
                 )}
               </div>
               <button onClick={() => setLogoModal(null)} className="text-slate-500 hover:text-slate-300">
@@ -471,7 +477,7 @@ export default function SiteManager() {
               />
               <div
                 onDragOver={(e) => e.preventDefault()}
-                onDrop={(e) => onFileDrop(e, logoModal)}
+                onDrop={(e) => void onFileDrop(e, logoModal)}
                 onClick={() => modalFileInputRef.current?.click()}
                 className="border-2 border-dashed border-obsidian-500 hover:border-neon-orange/50 rounded-xl p-6 text-center cursor-pointer transition-all"
               >
@@ -500,7 +506,7 @@ export default function SiteManager() {
                   className="flex-1 px-3 py-2 text-xs bg-obsidian-600 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange font-mono"
                 />
                 <button
-                  onClick={downloadLogo}
+                  onClick={() => void downloadLogo()}
                   disabled={logoUploading || !logoUrl.trim()}
                   className="px-3 py-2 bg-neon-orange text-white text-xs font-semibold rounded-lg hover:bg-neon-orangeDark flex items-center gap-1.5 transition-colors disabled:opacity-50"
                 >

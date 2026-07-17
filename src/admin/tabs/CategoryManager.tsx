@@ -9,28 +9,62 @@ export default function CategoryManager() {
   const [newName, setNewName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editName, setEditName] = useState('');
+  const [saving, setSaving] = useState(false);
 
   const { categories } = getModeData(activeMode);
 
-  const add = () => {
-    if (!newName.trim()) return;
-    addCategoryInMode(activeMode, { id: Date.now().toString(), name: newName.trim(), icon: 'FolderOpen', color: 'blue' });
-    setNewName('');
+  const showError = (message: string, err: unknown) => {
+    console.error(message, err);
+    alert(message);
   };
 
-  const remove = (id: string) => removeCategoryInMode(activeMode, id);
+  const add = async () => {
+    if (!newName.trim() || saving) return;
+    setSaving(true);
+    try {
+      await addCategoryInMode(activeMode, {
+        id: '',
+        name: newName.trim(),
+        icon: 'FolderOpen',
+        color: activeMode === 'secure' ? 'orange' : 'blue',
+      });
+      setNewName('');
+    } catch (err) {
+      showError('카테고리 추가에 실패했습니다.', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const remove = async (id: string) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await removeCategoryInMode(activeMode, id);
+    } catch (err) {
+      showError('카테고리 삭제에 실패했습니다.', err);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const startEdit = (id: string, name: string) => {
     setEditingId(id);
     setEditName(name);
   };
 
-  const saveEdit = () => {
-    if (editingId && editName.trim()) {
-      updateCategoryNameInMode(activeMode, editingId, editName.trim());
+  const saveEdit = async () => {
+    if (!editingId || !editName.trim() || saving) return;
+    setSaving(true);
+    try {
+      await updateCategoryNameInMode(activeMode, editingId, editName.trim());
+      setEditingId(null);
+      setEditName('');
+    } catch (err) {
+      showError('카테고리 수정에 실패했습니다.', err);
+    } finally {
+      setSaving(false);
     }
-    setEditingId(null);
-    setEditName('');
   };
 
   return (
@@ -42,13 +76,16 @@ export default function CategoryManager() {
           <input
             value={newName}
             onChange={(e) => setNewName(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && add()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void add();
+            }}
             placeholder={`새 카테고리 이름 (${activeMode === 'secure' ? '안전 접속 모드' : '일반 모드'})`}
             className="flex-1 px-3 py-2 text-sm bg-obsidian-600 border border-obsidian-500 rounded-lg text-white placeholder-slate-500 focus:outline-none focus:border-neon-orange"
           />
           <button
-            onClick={add}
-            className="px-4 py-2 bg-neon-orange text-white text-sm font-semibold rounded-lg hover:bg-neon-orangeDark flex items-center gap-1.5 transition-colors"
+            onClick={() => void add()}
+            disabled={saving || !newName.trim()}
+            className="px-4 py-2 bg-neon-orange text-white text-sm font-semibold rounded-lg hover:bg-neon-orangeDark flex items-center gap-1.5 transition-colors disabled:opacity-50"
           >
             <Plus size={14} /> 추가
           </button>
@@ -67,18 +104,20 @@ export default function CategoryManager() {
               <input
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && saveEdit()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void saveEdit();
+                }}
                 autoFocus
                 className="flex-1 px-2 py-1 text-sm bg-obsidian-700 border border-neon-orange/50 rounded text-white focus:outline-none"
               />
             ) : (
               <span className="flex-1 text-sm text-slate-200 font-medium">{cat.name}</span>
             )}
-            <span className="text-xs text-slate-600 font-mono hidden sm:block">{cat.id}</span>
+            <span className="text-xs text-slate-600 font-mono hidden sm:block">ID {cat.id}</span>
             <span className="text-xs text-slate-600 font-mono">{cat.sites.length}개</span>
             {editingId === cat.id ? (
               <div className="flex items-center gap-1">
-                <button onClick={saveEdit} className="text-emerald-400 hover:text-emerald-300 transition-colors">
+                <button onClick={() => void saveEdit()} disabled={saving} className="text-emerald-400 hover:text-emerald-300 transition-colors disabled:opacity-50">
                   <Check size={14} />
                 </button>
                 <button onClick={() => setEditingId(null)} className="text-slate-500 hover:text-slate-300 transition-colors">
@@ -94,8 +133,9 @@ export default function CategoryManager() {
                   <Edit3 size={14} />
                 </button>
                 <button
-                  onClick={() => remove(cat.id)}
-                  className="text-slate-500 hover:text-red-400 transition-colors"
+                  onClick={() => void remove(cat.id)}
+                  disabled={saving}
+                  className="text-slate-500 hover:text-red-400 transition-colors disabled:opacity-50"
                 >
                   <Trash2 size={14} />
                 </button>

@@ -30,6 +30,9 @@ export interface Ad {
   script: string;
   /** Optional ad image — local path or external URL */
   image?: string;
+  placement?: string;
+  isActive?: boolean;
+  sortOrder?: number;
 }
 
 export interface InterAd {
@@ -42,6 +45,8 @@ export interface InterAd {
   redirectUrl: string;
   badge: string;
   isActive: boolean;
+  expiresAt?: string;
+  sortOrder?: number;
 }
 
 /* ============================================================

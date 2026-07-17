@@ -1,20 +1,38 @@
 import { Fragment } from 'react';
 import {
-  BookOpen, Tv, Film, Flame, Download, Dices, MessageSquare, Shield,
-  ShoppingCart, ChevronRight, LucideIcon, ExternalLink,
+  BookOpen,
+  Tv,
+  Film,
+  Flame,
+  Download,
+  Dices,
+  MessageSquare,
+  Shield,
+  ShoppingCart,
+  ChevronRight,
+  LucideIcon,
+  ExternalLink,
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
-import { useData } from '../context/DataContext';
+import { isVisibleAd, useData } from '../context/DataContext';
 import { Site, InterAd } from '../data/categories';
 
 const iconMap: Record<string, LucideIcon> = {
-  BookOpen, Tv, Film, Flame, Download, Dices, MessageSquare, Shield, ShoppingCart,
+  BookOpen,
+  Tv,
+  Film,
+  Flame,
+  Download,
+  Dices,
+  MessageSquare,
+  Shield,
+  ShoppingCart,
 };
 
 const statusDot: Record<string, { dark: string; light: string }> = {
   normal: { dark: 'bg-emerald-400', light: 'bg-emerald-500' },
-  busy:   { dark: 'bg-amber-400',   light: 'bg-amber-500' },
-  slow:   { dark: 'bg-red-400',     light: 'bg-red-500' },
+  busy: { dark: 'bg-amber-400', light: 'bg-amber-500' },
+  slow: { dark: 'bg-red-400', light: 'bg-red-500' },
 };
 
 const statusLabel: Record<string, string> = {
@@ -24,14 +42,14 @@ const statusLabel: Record<string, string> = {
 };
 
 const colorMap: Record<string, { dark: string; light: string; icon: string }> = {
-  blue:   { dark: 'border-white/8 hover:border-blue-400/30',          light: 'border-slate-200/60 hover:border-blue-300',      icon: 'text-blue-400' },
-  green:  { dark: 'border-white/8 hover:border-emerald-400/30',      light: 'border-slate-200/60 hover:border-emerald-300',   icon: 'text-emerald-400' },
-  red:    { dark: 'border-white/8 hover:border-red-400/30',          light: 'border-slate-200/60 hover:border-red-300',       icon: 'text-red-400' },
-  orange: { dark: 'border-white/8 hover:border-orange-400/30',       light: 'border-slate-200/60 hover:border-orange-300',   icon: 'text-orange-400' },
-  teal:   { dark: 'border-white/8 hover:border-teal-400/30',          light: 'border-slate-200/60 hover:border-teal-300',     icon: 'text-teal-400' },
-  yellow: { dark: 'border-white/8 hover:border-yellow-400/30',       light: 'border-slate-200/60 hover:border-yellow-300',   icon: 'text-yellow-500' },
-  indigo: { dark: 'border-white/8 hover:border-indigo-400/30',       light: 'border-slate-200/60 hover:border-indigo-300',   icon: 'text-indigo-400' },
-  cyan:   { dark: 'border-white/8 hover:border-cyan-400/30',         light: 'border-slate-200/60 hover:border-cyan-300',     icon: 'text-cyan-400' },
+  blue: { dark: 'border-white/8 hover:border-blue-400/30', light: 'border-slate-200/60 hover:border-blue-300', icon: 'text-blue-400' },
+  green: { dark: 'border-white/8 hover:border-emerald-400/30', light: 'border-slate-200/60 hover:border-emerald-300', icon: 'text-emerald-400' },
+  red: { dark: 'border-white/8 hover:border-red-400/30', light: 'border-slate-200/60 hover:border-red-300', icon: 'text-red-400' },
+  orange: { dark: 'border-white/8 hover:border-orange-400/30', light: 'border-slate-200/60 hover:border-orange-300', icon: 'text-orange-400' },
+  teal: { dark: 'border-white/8 hover:border-teal-400/30', light: 'border-slate-200/60 hover:border-teal-300', icon: 'text-teal-400' },
+  yellow: { dark: 'border-white/8 hover:border-yellow-400/30', light: 'border-slate-200/60 hover:border-yellow-300', icon: 'text-yellow-500' },
+  indigo: { dark: 'border-white/8 hover:border-indigo-400/30', light: 'border-slate-200/60 hover:border-indigo-300', icon: 'text-indigo-400' },
+  cyan: { dark: 'border-white/8 hover:border-cyan-400/30', light: 'border-slate-200/60 hover:border-cyan-300', icon: 'text-cyan-400' },
 };
 
 interface SiteRowProps {
@@ -41,7 +59,7 @@ interface SiteRowProps {
 }
 
 function SiteRow({ site, isSecure, onClick }: SiteRowProps) {
-  const dot = isSecure ? statusDot[site.status].dark : statusDot[site.status].light;
+  const dot = isSecure ? statusDot[site.status]?.dark : statusDot[site.status]?.light;
 
   return (
     <button
@@ -52,41 +70,44 @@ function SiteRow({ site, isSecure, onClick }: SiteRowProps) {
           : 'hover:bg-slate-200/40 text-slate-600 hover:text-slate-900'
       }`}
     >
-      {/* Squircle logo — neon initial placeholder when no image */}
       <div
-        className={`squircle w-9 h-9 flex items-center justify-center flex-shrink-0 overflow-hidden relative transition-transform duration-200 group-hover:scale-105 ${
+        className={`squircle w-12 h-12 flex items-center justify-center flex-shrink-0 overflow-hidden relative transition-transform duration-200 group-hover:scale-105 bg-white/90 border p-1.5 ${
           isSecure
-            ? 'bg-[#18181b] border border-white/[0.06] logo-placeholder-glow'
-            : 'bg-[#18181b] border border-slate-400/20 logo-placeholder-glow'
+            ? 'border-white/[0.12] logo-placeholder-glow'
+            : 'border-slate-300/70 logo-placeholder-glow'
         }`}
       >
-        <img
-          src={site.logo}
-          alt={site.name}
-          className="w-6 h-6 object-contain relative z-10"
-          onError={(e) => {
-            const img = e.target as HTMLImageElement;
-            img.style.display = 'none';
-            const initial = site.name.charAt(0);
-            if (img.parentElement) {
-              img.parentElement.innerHTML = `<span class="relative z-10 flex items-center justify-center w-full h-full text-base font-bold" style="color:#fb923c;text-shadow:0 0 8px rgba(249,115,22,0.6),0 0 16px rgba(249,115,22,0.3)">${initial}</span>`;
-            }
-          }}
-        />
+        {site.logo ? (
+          <img
+            src={site.logo}
+            alt={site.name}
+            className="w-full h-full object-contain relative z-10"
+            onError={(e) => {
+              const img = e.target as HTMLImageElement;
+              img.style.display = 'none';
+              const initial = site.name.charAt(0) || '?';
+              if (img.parentElement) {
+                img.parentElement.innerHTML = `<span class="relative z-10 flex items-center justify-center w-full h-full text-base font-bold" style="color:#fb923c;text-shadow:0 0 8px rgba(249,115,22,0.6),0 0 16px rgba(249,115,22,0.3)">${initial}</span>`;
+              }
+            }}
+          />
+        ) : (
+          <span className="relative z-10 flex items-center justify-center w-full h-full text-base font-bold text-neon-orange">
+            {site.name.charAt(0) || '?'}
+          </span>
+        )}
       </div>
 
-      {/* Site name — high contrast, tight tracking */}
       <span className={`flex-1 text-[15px] sm:text-base font-bold tracking-tight leading-tight whitespace-nowrap overflow-hidden text-ellipsis ${
         isSecure ? 'text-slate-100' : 'text-slate-900'
       }`}>
         {site.name}
       </span>
 
-      {/* Micro dot indicator + label — ultra-compact, right-aligned */}
       <div className="flex items-center gap-1 shrink-0">
-        <span className={`w-1.5 h-1.5 rounded-full ${dot} pulse-dot`} />
+        <span className={`w-1.5 h-1.5 rounded-full ${dot || 'bg-slate-400'} pulse-dot`} />
         <span className={`text-[9px] font-medium ${isSecure ? 'text-slate-500' : 'text-slate-400'}`}>
-          {statusLabel[site.status]}
+          {statusLabel[site.status] || '상태'}
         </span>
       </div>
     </button>
@@ -108,6 +129,7 @@ const badgeColorMap: Record<string, string> = {
 
 function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean; onClick: (url: string, name: string) => void }) {
   const badgeClass = badgeColorMap[ad.badge] || 'bg-neon-orange text-white';
+
   return (
     <div
       className={`col-span-1 rounded-2xl border p-4 flex flex-col justify-between transition-all duration-200 group cursor-pointer hover:scale-[1.01] active:scale-[0.99] relative overflow-hidden ${
@@ -117,7 +139,6 @@ function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean
       }`}
       onClick={() => onClick(ad.redirectUrl, ad.title)}
     >
-      {/* Top row: badge + external link icon */}
       <div className="flex items-start justify-between">
         <span className={`text-[10px] font-black px-2 py-0.5 rounded border ${badgeClass} border-white/10`}>
           {ad.badge}
@@ -125,11 +146,17 @@ function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean
         <ExternalLink size={16} className={`flex-shrink-0 transition-colors ${isSecure ? 'text-slate-600 group-hover:text-neon-orange' : 'text-zinc-500 group-hover:text-zinc-300'}`} />
       </div>
 
-      {/* Middle: image + title + description */}
       <div className="mt-3 flex-1">
         {ad.imageUrl && (
-          <div className="mb-2 squircle w-10 h-10 flex items-center justify-center overflow-hidden bg-obsidian-700 border border-white/[0.06]">
-            <img src={ad.imageUrl} alt={ad.title} className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+          <div className="mb-2 squircle w-12 h-12 flex items-center justify-center overflow-hidden bg-white/90 border border-white/[0.12] p-1.5">
+            <img
+              src={ad.imageUrl}
+              alt={ad.title}
+              className="w-full h-full object-contain"
+              onError={(e) => {
+                (e.target as HTMLImageElement).style.display = 'none';
+              }}
+            />
           </div>
         )}
         <h4 className={`text-sm font-bold tracking-tight leading-tight ${isSecure ? 'text-white' : 'text-zinc-100'}`}>
@@ -140,7 +167,6 @@ function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean
         </p>
       </div>
 
-      {/* Bottom: CTA button */}
       <a
         href={ad.redirectUrl}
         target="_blank"
@@ -158,10 +184,9 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
   const { isSecure } = useTheme();
   const { categories, interAds } = useData();
 
-  // Build a map: index -> ads that should render after that category index
   const adsAfterIndex = new Map<number, InterAd[]>();
   interAds
-    .filter((a) => a.isActive)
+    .filter(isVisibleAd)
     .forEach((ad) => {
       const arr = adsAfterIndex.get(ad.targetCategoryIndex) || [];
       arr.push(ad);
@@ -183,7 +208,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                   : `glass-light ${colors.light}`
               }`}
             >
-              {/* Category Header — compact */}
               <div className={`flex items-center gap-2 mb-2 pb-2 border-b ${isSecure ? 'border-white/[0.06]' : 'border-slate-200/60'}`}>
                 <IconComponent size={13} className={colors.icon} />
                 <h3 className={`text-xs font-bold flex-1 tracking-tight ${isSecure ? 'text-slate-200' : 'text-slate-700'}`}>
@@ -194,7 +218,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                 </span>
               </div>
 
-              {/* Site List — high density */}
               <div className="space-y-0.5">
                 {category.sites.map((site) => (
                   <SiteRow key={site.id} site={site} isSecure={isSecure} onClick={onSiteClick} />
@@ -202,7 +225,6 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
               </div>
             </div>
 
-            {/* Inter-category ads after this index */}
             {(adsAfterIndex.get(index) || []).map((ad) => (
               <InterAdCard key={ad.id} ad={ad} isSecure={isSecure} onClick={onSiteClick} />
             ))}
