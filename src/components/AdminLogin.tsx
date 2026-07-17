@@ -37,11 +37,11 @@ export default function AdminLogin({ onSuccess, onExit }: AdminLoginProps) {
     return () => clearInterval(t);
   }, [locked]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (locked) return;
 
-    const result = login(id, pw);
+    const result = await login(id, pw);
     if (result.ok) {
       setError('');
       onSuccess();

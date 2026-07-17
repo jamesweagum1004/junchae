@@ -7,6 +7,7 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { promisify } = require('util');
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -19,6 +20,12 @@ const adUploadDir =
 const logoPublicPath = '/uploads/logos';
 const adPublicPath = '/uploads/ads';
 const adminApiToken = (process.env.ADMIN_API_TOKEN || '').trim();
+const adminAuthMode = 'normal';
+const adminAuthSection = 'admin_auth';
+const defaultAdminPath = 'admin';
+const defaultAdminUsername = 'admin1004';
+const defaultAdminPassword = 'change-me-now';
+const scryptAsync = promisify(crypto.scrypt);
 const maxLogoSize = 2 * 1024 * 1024;
 const maxAdImageSize = 5 * 1024 * 1024;
 const allowedLogoExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.ico']);
@@ -286,6 +293,36 @@ function normalizeSafeKey(value, fallback = '') {
   return text;
 }
 
+function normalizeAdminPath(value, fallback = '') {
+  if (typeof value !== 'string') return fallback;
+  const clean = value.replace(/[\/\\]+/g, '').replace(/\s+/g, '').trim();
+  if (!clean || !/^[a-zA-Z0-9_-]+$/.test(clean)) return fallback;
+  return clean;
+}
+
+function normalizeAdminUsername(value, fallback = '') {
+  const text = normalizeRequiredText(value);
+  return text || fallback;
+}
+
+async function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = await scryptAsync(String(password), salt, 64);
+  return `scrypt$${salt}$${hash.toString('hex')}`;
+}
+
+async function verifyPassword(password, storedHash) {
+  if (typeof storedHash !== 'string') return false;
+  const [scheme, salt, hashHex] = storedHash.split('$');
+  if (scheme !== 'scrypt' || !salt || !hashHex) return false;
+
+  const expected = Buffer.from(hashHex, 'hex');
+  if (expected.length !== 64) return false;
+
+  const actual = await scryptAsync(String(password), salt, expected.length);
+  return actual.length === expected.length && crypto.timingSafeEqual(actual, expected);
+}
+
 function normalizeSeoScore(value) {
   const score = Number(value);
   if (!Number.isFinite(score)) return 0;
@@ -500,6 +537,8 @@ async function initializeDatabase() {
     )
   `);
 
+  await ensureAdminAuthDefaults();
+
   await db.execute(`
     INSERT IGNORE INTO categories (name, mode, sort_order)
     SELECT DISTINCT category, mode, 0
@@ -511,6 +550,70 @@ async function initializeDatabase() {
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, data: { status: 'healthy' } });
 });
+
+app.get('/api/admin/config', asyncRoute(async (req, res) => {
+  const config = await getAdminAuthConfig();
+  return res.json({
+    ok: true,
+    data: {
+      adminPath: config.adminPath,
+      adminUsername: config.adminUsername,
+    },
+  });
+}));
+
+app.post('/api/admin/login', asyncRoute(async (req, res) => {
+  const username = normalizeRequiredText(req.body?.username);
+  const password = typeof req.body?.password === 'string' ? req.body.password : '';
+  const config = await getAdminAuthConfig();
+
+  const usernameMatches = tokenMatches(config.adminUsername, username);
+  const passwordMatches = await verifyPassword(password, config.adminPasswordHash);
+
+  if (!usernameMatches || !passwordMatches) {
+    return res.status(401).json({ ok: false, error: 'Invalid credentials' });
+  }
+
+  return res.json({ ok: true });
+}));
+
+app.post('/api/admin/auth-settings', requireAdminToken, asyncRoute(async (req, res) => {
+  const adminPath = normalizeAdminPath(req.body?.adminPath);
+  const adminUsername = normalizeAdminUsername(req.body?.adminUsername);
+  const adminPassword = typeof req.body?.adminPassword === 'string' ? req.body.adminPassword : '';
+
+  if (!adminPath) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'adminPath may contain only letters, numbers, hyphens, and underscores.');
+  }
+  if (!adminUsername) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'adminUsername is required.');
+  }
+  if (adminPassword.trim() && adminPassword.length < 6) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'adminPassword must be at least 6 characters.');
+  }
+
+  const settings = {
+    admin_path: adminPath,
+    admin_username: adminUsername,
+  };
+  const secretKeys = [];
+
+  if (adminPassword.trim()) {
+    settings.admin_password_hash = await hashPassword(adminPassword);
+    secretKeys.push('admin_password_hash');
+  }
+
+  await saveSettings(adminAuthMode, adminAuthSection, settings, secretKeys);
+  const config = await getAdminAuthConfig();
+
+  return res.json({
+    ok: true,
+    data: {
+      adminPath: config.adminPath,
+      adminUsername: config.adminUsername,
+    },
+  });
+}));
 
 async function getSettings(mode, section, includeSecrets = false) {
   const [rows] = await db.execute(
@@ -561,6 +664,54 @@ async function saveSettings(mode, section, settings, secretKeys = []) {
       [mode, section, settingKey, value, isSecret]
     );
   }
+}
+
+async function ensureAdminAuthDefaults() {
+  const currentPath = normalizeAdminPath(
+    await getSettingValue(adminAuthMode, adminAuthSection, 'admin_path'),
+    ''
+  );
+  const currentUsername = normalizeAdminUsername(
+    await getSettingValue(adminAuthMode, adminAuthSection, 'admin_username'),
+    ''
+  );
+  const currentPasswordHash = await getSettingValue(
+    adminAuthMode,
+    adminAuthSection,
+    'admin_password_hash'
+  );
+
+  const defaults = {};
+  const secretKeys = [];
+
+  if (!currentPath) defaults.admin_path = defaultAdminPath;
+  if (!currentUsername) defaults.admin_username = defaultAdminUsername;
+  if (!currentPasswordHash || !currentPasswordHash.startsWith('scrypt$')) {
+    defaults.admin_password_hash = await hashPassword(defaultAdminPassword);
+    secretKeys.push('admin_password_hash');
+  }
+
+  if (Object.keys(defaults).length > 0) {
+    await saveSettings(adminAuthMode, adminAuthSection, defaults, secretKeys);
+  }
+}
+
+async function getAdminAuthConfig() {
+  await ensureAdminAuthDefaults();
+
+  const adminPath = normalizeAdminPath(
+    await getSettingValue(adminAuthMode, adminAuthSection, 'admin_path'),
+    defaultAdminPath
+  );
+  const adminUsername = normalizeAdminUsername(
+    await getSettingValue(adminAuthMode, adminAuthSection, 'admin_username'),
+    defaultAdminUsername
+  );
+  const adminPasswordHash =
+    (await getSettingValue(adminAuthMode, adminAuthSection, 'admin_password_hash')) ||
+    (await hashPassword(defaultAdminPassword));
+
+  return { adminPath, adminUsername, adminPasswordHash };
 }
 
 function formatSeo(site) {
@@ -649,6 +800,16 @@ app.get('/api/settings', asyncRoute(async (req, res) => {
   if (!section) {
     return jsonError(res, 400, 'VALIDATION_ERROR', 'section is required.');
   }
+  if (section === adminAuthSection) {
+    const config = await getAdminAuthConfig();
+    return res.json({
+      ok: true,
+      data: {
+        admin_path: config.adminPath,
+        admin_username: config.adminUsername,
+      },
+    });
+  }
   const settings = await getSettings(mode, section, false);
   return res.json({ ok: true, data: settings });
 }));
@@ -658,6 +819,9 @@ app.post('/api/settings', requireAdminToken, asyncRoute(async (req, res) => {
   const section = normalizeSafeKey(req.body?.section);
   if (!section) {
     return jsonError(res, 400, 'VALIDATION_ERROR', 'section is required.');
+  }
+  if (section === adminAuthSection) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'Use /api/admin/auth-settings for admin auth settings.');
   }
 
   const secretKeys = section === 'deepseek' ? ['api_key'] : [];

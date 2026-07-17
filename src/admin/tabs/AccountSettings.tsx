@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import { KeyRound, Eye, EyeOff, Route, Check, AlertTriangle, Send, ToggleLeft, ToggleRight } from 'lucide-react';
 import { useAdminAuth } from '../../context/AdminAuthContext';
 import { useData } from '../../context/DataContext';
-import { ADMIN_API_TOKEN_STORAGE_KEY } from '../../lib/adminApi';
+import { ADMIN_API_TOKEN_STORAGE_KEY, adminAuthHeaders } from '../../lib/adminApi';
 
 export default function AccountSettings() {
-  const { cred, updateCred, adminPath, updateAdminPath } = useAdminAuth();
+  const { adminUsername, adminPath, refreshAdminConfig, applyAdminConfig } = useAdminAuth();
   const { telegramLink, telegramVisible, setTelegramLink, setTelegramVisible } = useData();
 
-  const [newId, setNewId] = useState(cred.id);
-  const [newPw, setNewPw] = useState(cred.pw);
+  const [newId, setNewId] = useState(adminUsername);
+  const [newPw, setNewPw] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [savedCred, setSavedCred] = useState(false);
   const [credError, setCredError] = useState('');
@@ -30,27 +30,85 @@ export default function AccountSettings() {
     }
   }, []);
 
-  const handleSaveCred = () => {
-    if (!newId.trim() || !newPw.trim()) {
-      setCredError('아이디와 비밀번호를 모두 입력하세요.');
+  useEffect(() => {
+    refreshAdminConfig()
+      .then((config) => {
+        setNewId(config.adminUsername);
+        setPathInput(config.adminPath);
+      })
+      .catch((err) => {
+        console.error('Failed to refresh admin config', err);
+      });
+  }, [refreshAdminConfig]);
+
+  useEffect(() => {
+    setNewId(adminUsername);
+  }, [adminUsername]);
+
+  useEffect(() => {
+    setPathInput(adminPath);
+  }, [adminPath]);
+
+  const saveAuthSettings = async (adminPassword: string, successTarget: 'cred' | 'path') => {
+    const username = newId.trim();
+    if (!username) {
+      setCredError('아이디를 입력하세요.');
       setSavedCred(false);
+      setSavedPath(false);
       return;
     }
-    if (newPw.length < 6) {
+    if (adminPassword.trim() && adminPassword.length < 6) {
       setCredError('비밀번호는 6자 이상이어야 합니다.');
       setSavedCred(false);
+      setSavedPath(false);
       return;
     }
-    updateCred({ id: newId.trim(), pw: newPw });
-    setCredError('');
-    setSavedCred(true);
-    setTimeout(() => setSavedCred(false), 3000);
+
+    try {
+      const res = await fetch('/api/admin/auth-settings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...adminAuthHeaders(),
+        },
+        body: JSON.stringify({
+          adminPath: pathInput,
+          adminUsername: username,
+          adminPassword,
+        }),
+      });
+      const body = await res.json().catch(() => null);
+
+      if (!res.ok || !body?.ok) {
+        throw new Error(body?.message || body?.error || `Request failed with ${res.status}`);
+      }
+
+      applyAdminConfig(body.data);
+      setNewId(body.data.adminUsername);
+      setPathInput(body.data.adminPath);
+      setNewPw('');
+      setCredError('');
+
+      if (successTarget === 'cred') {
+        setSavedCred(true);
+        setTimeout(() => setSavedCred(false), 5000);
+      } else {
+        setSavedPath(true);
+        setTimeout(() => setSavedPath(false), 5000);
+      }
+    } catch (err) {
+      setCredError(err instanceof Error ? err.message : '저장에 실패했습니다.');
+      setSavedCred(false);
+      setSavedPath(false);
+    }
+  };
+
+  const handleSaveCred = () => {
+    void saveAuthSettings(newPw, 'cred');
   };
 
   const handleSavePath = () => {
-    updateAdminPath(pathInput);
-    setSavedPath(true);
-    setTimeout(() => setSavedPath(false), 3000);
+    void saveAuthSettings('', 'path');
   };
 
   const handleSaveAdminApiToken = () => {
@@ -107,7 +165,7 @@ export default function AccountSettings() {
               value={newPw}
               onChange={(e) => setNewPw(e.target.value)}
               className="w-full bg-obsidian-700/60 border border-white/[0.06] rounded-lg px-3 py-2.5 pr-10 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange/40 focus:ring-1 focus:ring-neon-orange/20 transition-all"
-              placeholder="••••••••"
+              placeholder="비워두면 변경하지 않음"
             />
             <button
               type="button"
@@ -129,7 +187,7 @@ export default function AccountSettings() {
         {savedCred && (
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 animate-fade-in">
             <Check size={13} className="text-emerald-400 flex-shrink-0" />
-            <span className="text-[11px] font-mono text-emerald-300">계정 정보가 안전하게 저장되었습니다.</span>
+            <span className="text-[11px] font-mono text-emerald-300">저장 완료. 관리자 주소가 변경된 경우 새 주소로 다시 접속해 주세요.</span>
           </div>
         )}
 
@@ -222,7 +280,7 @@ export default function AccountSettings() {
           <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 animate-fade-in">
             <Check size={13} className="text-emerald-400 flex-shrink-0" />
             <span className="text-[11px] font-mono text-emerald-300">
-              주소가 변경되었습니다. 다음 접속 시 /{adminPath} 로 이동하세요.
+              저장 완료. 관리자 주소가 변경된 경우 새 주소로 다시 접속해 주세요.
             </span>
           </div>
         )}
