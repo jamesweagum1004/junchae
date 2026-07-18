@@ -17,6 +17,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { isVisibleAd, useData } from '../context/DataContext';
 import { Site, InterAd } from '../data/categories';
+import { getSiteStatusMeta } from '../lib/siteStatus';
 
 const iconMap: Record<string, LucideIcon> = {
   BookOpen,
@@ -30,18 +31,6 @@ const iconMap: Record<string, LucideIcon> = {
   ShoppingCart,
 };
 
-const statusDot: Record<string, { dark: string; light: string }> = {
-  normal: { dark: 'bg-emerald-400', light: 'bg-emerald-500' },
-  busy: { dark: 'bg-amber-400', light: 'bg-amber-500' },
-  slow: { dark: 'bg-red-400', light: 'bg-red-500' },
-};
-
-const statusLabel: Record<string, string> = {
-  normal: '정상',
-  busy: '혼잡',
-  slow: '지연',
-};
-
 const colorMap: Record<string, { dark: string; light: string; icon: string }> = {
   blue: { dark: 'border-white/8 hover:border-blue-400/30', light: 'border-slate-200/60 hover:border-blue-300', icon: 'text-blue-400' },
   green: { dark: 'border-white/8 hover:border-emerald-400/30', light: 'border-slate-200/60 hover:border-emerald-300', icon: 'text-emerald-400' },
@@ -53,6 +42,15 @@ const colorMap: Record<string, { dark: string; light: string; icon: string }> = 
   cyan: { dark: 'border-white/8 hover:border-cyan-400/30', light: 'border-slate-200/60 hover:border-cyan-300', icon: 'text-cyan-400' },
 };
 
+const badgeColorMap: Record<string, string> = {
+  HOT: 'bg-red-500 text-white',
+  AD: 'bg-slate-600 text-white',
+  NEW: 'bg-blue-500 text-white',
+  VIP: 'bg-amber-500 text-white',
+  추천: 'bg-emerald-500 text-white',
+  이벤트: 'bg-purple-500 text-white',
+};
+
 interface SiteRowProps {
   site: Site;
   isSecure: boolean;
@@ -60,7 +58,7 @@ interface SiteRowProps {
 }
 
 function SiteRow({ site, isSecure, onClick }: SiteRowProps) {
-  const dot = isSecure ? statusDot[site.status]?.dark : statusDot[site.status]?.light;
+  const status = getSiteStatusMeta(site.status, isSecure);
 
   return (
     <button
@@ -105,28 +103,12 @@ function SiteRow({ site, isSecure, onClick }: SiteRowProps) {
         {site.name}
       </span>
 
-      <div className="flex items-center gap-1 shrink-0">
-        <span className={`w-1.5 h-1.5 rounded-full ${dot || 'bg-slate-400'} pulse-dot`} />
-        <span className={`hidden sm:inline text-[9px] font-medium ${isSecure ? 'text-slate-500' : 'text-slate-400'}`}>
-          {statusLabel[site.status] || '상태'}
-        </span>
-      </div>
+      <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold leading-none ${status.className}`}>
+        {status.label}
+      </span>
     </button>
   );
 }
-
-interface CategoryGridProps {
-  onSiteClick: (url: string, name: string) => void;
-}
-
-const badgeColorMap: Record<string, string> = {
-  HOT: 'bg-red-500 text-white',
-  AD: 'bg-slate-600 text-white',
-  NEW: 'bg-blue-500 text-white',
-  VIP: 'bg-amber-500 text-white',
-  추천: 'bg-emerald-500 text-white',
-  이벤트: 'bg-purple-500 text-white',
-};
 
 function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean; onClick: (url: string, name: string) => void }) {
   const badgeClass = badgeColorMap[ad.badge] || 'bg-neon-orange text-white';
@@ -181,6 +163,10 @@ function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean
   );
 }
 
+interface CategoryGridProps {
+  onSiteClick: (url: string, name: string) => void;
+}
+
 export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
   const navigate = useNavigate();
   const { isSecure } = useTheme();
@@ -200,7 +186,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
       {categories.map((category, index) => {
         const IconComponent = iconMap[category.icon] || ChevronRight;
         const colors = colorMap[category.color] || colorMap.blue;
-        const visibleSites = category.sites.slice(0, 5);
+        const visibleSites = category.sites.slice(0, 6);
         const hiddenCount = Math.max(0, category.sites.length - visibleSites.length);
 
         return (

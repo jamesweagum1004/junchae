@@ -95,6 +95,12 @@ const categoryColumns = [
   'name',
   'mode',
   'sort_order',
+  'seo_title',
+  'seo_description',
+  'seo_keywords',
+  'seo_intro',
+  'seo_faq',
+  'seo_updated_at',
   'created_at',
   'updated_at',
 ];
@@ -136,6 +142,14 @@ const siteControlColumns = [
   'is_featured',
   'featured_order',
   'sort_order',
+];
+
+const categorySeoColumns = [
+  'seo_title',
+  'seo_description',
+  'seo_keywords',
+  'seo_intro',
+  'seo_faq',
 ];
 
 const editableSiteColumns = [
@@ -288,6 +302,15 @@ function normalizeMode(value) {
   return 'normal';
 }
 
+function normalizeSiteStatus(value) {
+  const status = String(value || '').trim().toLowerCase();
+  if (status === 'normal' || status === 'active' || status === '정상') return 'normal';
+  if (status === 'busy' || status === 'congested' || status === '혼잡') return 'busy';
+  if (status === 'down' || status === 'offline' || status === 'slow' || status === '접속불가') return 'down';
+  if (status === 'checking' || status === 'unknown' || status === '확인중') return 'checking';
+  return 'checking';
+}
+
 function normalizeBooleanInt(value, fallback = 1) {
   if (value === true || value === 1 || value === '1' || value === 'true') return 1;
   if (value === false || value === 0 || value === '0' || value === 'false') return 0;
@@ -365,12 +388,19 @@ function normalizeSiteInput(body) {
     category: normalizeOptionalText(body.category),
     description: normalizeOptionalText(body.description),
     logo: normalizeOptionalText(body.logo),
-    status: normalizeOptionalText(body.status) || 'active',
+    status: normalizeSiteStatus(body.status || 'normal'),
     is_hidden: normalizeBooleanInt(body.is_hidden ?? body.isHidden, 0),
     is_featured: normalizeBooleanInt(body.is_featured ?? body.isFeatured, 0),
     featured_order: normalizeSortOrder(body.featured_order ?? body.featuredOrder),
     sort_order: normalizeSortOrder(body.sort_order ?? body.sortOrder),
   };
+}
+
+function normalizeCategorySeoValue(value) {
+  if (Array.isArray(value) || (value && typeof value === 'object')) {
+    return JSON.stringify(value);
+  }
+  return normalizeOptionalText(value);
 }
 
 function pickEditableSiteUpdates(body) {
@@ -398,6 +428,8 @@ function pickEditableSiteUpdates(body) {
       updates[column] = normalizeSeoScore(body[column]);
     } else if (column === 'mode') {
       updates[column] = normalizeMode(body[column]);
+    } else if (column === 'status') {
+      updates[column] = normalizeSiteStatus(body[column]);
     } else if (column === 'name' || column === 'url') {
       updates[column] = normalizeRequiredText(body[column]);
     } else {
@@ -409,11 +441,39 @@ function pickEditableSiteUpdates(body) {
 }
 
 function normalizeCategoryInput(body) {
-  return {
+  const category = {
     name: normalizeRequiredText(body.name),
     mode: normalizeMode(body.mode),
     sort_order: normalizeSortOrder(body.sort_order),
   };
+  categorySeoColumns.forEach((column) => {
+    category[column] = normalizeCategorySeoValue(body[column]);
+  });
+  return category;
+}
+
+function pickEditableCategoryUpdates(body) {
+  const updates = {};
+
+  if (Object.prototype.hasOwnProperty.call(body || {}, 'name')) {
+    updates.name = normalizeRequiredText(body.name);
+  }
+  if (Object.prototype.hasOwnProperty.call(body || {}, 'mode')) {
+    updates.mode = normalizeMode(body.mode);
+  }
+  if (Object.prototype.hasOwnProperty.call(body || {}, 'sort_order')) {
+    updates.sort_order = normalizeSortOrder(body.sort_order);
+  }
+
+  let hasSeoUpdate = false;
+  categorySeoColumns.forEach((column) => {
+    if (!Object.prototype.hasOwnProperty.call(body || {}, column)) return;
+    updates[column] = normalizeCategorySeoValue(body[column]);
+    hasSeoUpdate = true;
+  });
+  if (hasSeoUpdate) updates.seo_updated_at = new Date();
+
+  return updates;
 }
 
 function normalizeAdInput(body) {
@@ -534,6 +594,13 @@ async function initializeDatabase() {
       UNIQUE KEY unique_category_mode (name, mode)
     )
   `);
+
+  await ensureColumn('categories', 'seo_title', 'VARCHAR(255) NULL', 'sort_order');
+  await ensureColumn('categories', 'seo_description', 'TEXT NULL', 'seo_title');
+  await ensureColumn('categories', 'seo_keywords', 'TEXT NULL', 'seo_description');
+  await ensureColumn('categories', 'seo_intro', 'TEXT NULL', 'seo_keywords');
+  await ensureColumn('categories', 'seo_faq', 'LONGTEXT NULL', 'seo_intro');
+  await ensureColumn('categories', 'seo_updated_at', 'TIMESTAMP NULL', 'seo_faq');
 
   await db.execute(`
     CREATE TABLE IF NOT EXISTS ads (
@@ -1064,6 +1131,77 @@ robots 기본값은 index,follow 입니다.
   }
 }));
 
+app.post('/api/deepseek/generate-category-seo', requireAdminToken, asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.body?.mode);
+  const categoryId = normalizeOptionalText(req.body?.categoryId);
+  const categoryName = normalizeOptionalText(req.body?.categoryName);
+  const siteNames = Array.isArray(req.body?.siteNames)
+    ? req.body.siteNames.map(normalizeOptionalText).filter(Boolean).slice(0, 80)
+    : [];
+
+  if (!categoryName) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'categoryName is required.');
+  }
+
+  const { promptTemplate } = await getDeepSeekConfig(mode);
+  const prompt = `
+${promptTemplate}
+
+아래 카테고리 페이지용 SEO 데이터를 한국어 JSON으로 생성하세요.
+과장, 불법 조장, 우회 조장 표현은 피하고 "주소 확인", "링크 모음", "접속 상태 확인"처럼 순화하세요.
+결과는 바로 저장되지 않으며 관리자 검토용 미리보기로 사용됩니다.
+반드시 JSON만 출력하세요.
+
+카테고리 ID: ${categoryId || ''}
+카테고리명: ${categoryName}
+사이트명 목록:
+${siteNames.length ? siteNames.join(', ') : '사이트 없음'}
+
+JSON 필드:
+seo_title, seo_description, seo_keywords, seo_intro,
+seo_faq 배열 [{"question":"...", "answer":"..."}]
+`;
+
+  try {
+    const text = await callDeepSeek({
+      mode,
+      messages: [
+        { role: 'system', content: 'You are a Korean technical SEO expert. Return valid JSON only and never reveal secrets.' },
+        { role: 'user', content: prompt },
+      ],
+    });
+    const parsed = parseJsonFromText(text) || {};
+    const seoFaq = Array.isArray(parsed.seo_faq) ? parsed.seo_faq : [];
+    return res.json({
+      ok: true,
+      data: {
+        seo_title: normalizeOptionalText(parsed.seo_title) || `${categoryName} 사이트 모음 - 전체닷컴`,
+        seo_description:
+          normalizeOptionalText(parsed.seo_description) ||
+          `${categoryName} 카테고리의 주요 사이트를 빠르게 확인할 수 있는 링크 모음입니다.`,
+        seo_keywords: Array.isArray(parsed.seo_keywords)
+          ? parsed.seo_keywords.map(normalizeOptionalText).filter(Boolean).join(', ')
+          : normalizeOptionalText(parsed.seo_keywords) || categoryName,
+        seo_intro:
+          normalizeOptionalText(parsed.seo_intro) ||
+          `${categoryName} 카테고리의 주요 사이트를 한 곳에서 확인할 수 있습니다.`,
+        seo_faq: seoFaq
+          .map((item) => ({
+            question: normalizeOptionalText(item?.question),
+            answer: normalizeOptionalText(item?.answer),
+          }))
+          .filter((item) => item.question && item.answer)
+          .slice(0, 6),
+        text,
+        json: parsed,
+      },
+    });
+  } catch (err) {
+    console.error('DeepSeek category SEO generation error:', { code: err.code, status: err.status, message: err.message, body: err.body });
+    return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', err.message);
+  }
+}));
+
 app.get('/api/categories', asyncRoute(async (req, res) => {
   const values = [];
   let where = '';
@@ -1087,8 +1225,20 @@ app.post('/api/categories', requireAdminToken, asyncRoute(async (req, res) => {
 
   try {
     const [result] = await db.execute(
-      'INSERT INTO categories (name, mode, sort_order) VALUES (?, ?, ?)',
-      [category.name, category.mode, category.sort_order]
+      `INSERT INTO categories
+       (name, mode, sort_order, seo_title, seo_description, seo_keywords, seo_intro, seo_faq, seo_updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        category.name,
+        category.mode,
+        category.sort_order,
+        category.seo_title,
+        category.seo_description,
+        category.seo_keywords,
+        category.seo_intro,
+        category.seo_faq,
+        categorySeoColumns.some((column) => category[column]) ? new Date() : null,
+      ]
     );
     const created = await getCategoryById(result.insertId);
     return res.status(201).json({ ok: true, data: created });
@@ -1137,7 +1287,7 @@ app.patch('/api/categories/reorder', requireAdminToken, asyncRoute(async (req, r
   return res.json({ ok: true, data: rows });
 }));
 
-app.put('/api/categories/:id', requireAdminToken, asyncRoute(async (req, res) => {
+async function saveCategoryUpdates(req, res) {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
@@ -1146,16 +1296,7 @@ app.put('/api/categories/:id', requireAdminToken, asyncRoute(async (req, res) =>
     return jsonError(res, 404, 'NOT_FOUND', 'Category not found.');
   }
 
-  const updates = {};
-  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'name')) {
-    updates.name = normalizeRequiredText(req.body.name);
-  }
-  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'mode')) {
-    updates.mode = normalizeMode(req.body.mode);
-  }
-  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'sort_order')) {
-    updates.sort_order = normalizeSortOrder(req.body.sort_order);
-  }
+  const updates = pickEditableCategoryUpdates(req.body || {});
 
   if (Object.prototype.hasOwnProperty.call(updates, 'name') && !updates.name) {
     return jsonError(res, 400, 'VALIDATION_ERROR', 'name cannot be empty.');
@@ -1187,6 +1328,35 @@ app.put('/api/categories/:id', requireAdminToken, asyncRoute(async (req, res) =>
     }
     throw err;
   }
+}
+
+app.put('/api/categories/:id', requireAdminToken, asyncRoute(saveCategoryUpdates));
+
+app.patch('/api/categories/:id', requireAdminToken, asyncRoute(saveCategoryUpdates));
+
+app.patch('/api/categories/:id/seo', requireAdminToken, asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const updates = {};
+  categorySeoColumns.forEach((column) => {
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, column)) return;
+    updates[column] = normalizeCategorySeoValue(req.body[column]);
+  });
+  updates.seo_updated_at = new Date();
+
+  const entries = Object.entries(updates);
+  const setClause = entries.map(([column]) => `${column} = ?`).join(', ');
+  const values = entries.map(([, value]) => value);
+  values.push(id);
+
+  const [result] = await db.execute(`UPDATE categories SET ${setClause} WHERE id = ?`, values);
+  if (result.affectedRows === 0) {
+    return jsonError(res, 404, 'NOT_FOUND', 'Category not found.');
+  }
+
+  const updated = await getCategoryById(id);
+  return res.json({ ok: true, data: updated });
 }));
 
 app.delete('/api/categories/:id', requireAdminToken, asyncRoute(async (req, res) => {
@@ -1568,10 +1738,11 @@ app.patch('/api/sites/:id/status', requireAdminToken, asyncRoute(async (req, res
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
-  const status = normalizeOptionalText(req.body?.status);
-  if (!status) {
+  const rawStatus = normalizeOptionalText(req.body?.status);
+  if (!rawStatus) {
     return jsonError(res, 400, 'VALIDATION_ERROR', 'status is required.');
   }
+  const status = normalizeSiteStatus(rawStatus);
 
   const [result] = await db.execute('UPDATE sites SET status = ? WHERE id = ?', [status, id]);
   if (result.affectedRows === 0) {

@@ -20,15 +20,14 @@ import { useData } from '../../context/DataContext';
 import { Site, SiteStatus } from '../../data/categories';
 import ModeSubTabs from '../ModeSubTabs';
 import { adminAuthHeaders } from '../../lib/adminApi';
+import { getSiteStatusMeta, normalizeSiteStatus } from '../../lib/siteStatus';
 
 const statusOptions: { value: SiteStatus; label: string }[] = [
   { value: 'normal', label: '정상' },
   { value: 'busy', label: '혼잡' },
-  { value: 'slow', label: '지연' },
+  { value: 'down', label: '접속불가' },
+  { value: 'checking', label: '확인중' },
 ];
-
-const nextStatus = (status: SiteStatus): SiteStatus =>
-  status === 'normal' ? 'busy' : status === 'busy' ? 'slow' : 'normal';
 
 type LogoUploadResult = {
   ok: true;
@@ -166,11 +165,9 @@ export default function SiteManager() {
     }
   };
 
-  const toggleStatus = async (id: number) => {
-    const site = allSites.find((item) => item.id === id);
-    if (!site) return;
+  const updateStatus = async (id: number, status: SiteStatus) => {
     try {
-      await updateSiteStatusInMode(activeMode, id, nextStatus(site.status));
+      await updateSiteStatusInMode(activeMode, id, normalizeSiteStatus(status));
     } catch (err) {
       showError('상태 변경에 실패했습니다.', err);
     }
@@ -454,6 +451,7 @@ export default function SiteManager() {
               const isHidden = site.isHidden || site.is_hidden;
               const isFeatured = site.isFeatured || site.is_featured;
               const featuredOrder = site.featuredOrder ?? site.featured_order ?? 0;
+              const status = getSiteStatusMeta(site.status, true);
 
               return (
                 <tr key={site.id} className={`border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors ${isHidden ? 'opacity-55' : ''}`}>
@@ -564,18 +562,20 @@ export default function SiteManager() {
                     )}
                   </td>
                   <td className="px-3 py-2.5">
-                    <button
-                      onClick={() => void toggleStatus(site.id)}
-                      className={`text-xs font-semibold px-2 py-0.5 rounded-full border transition-colors ${
-                        site.status === 'normal'
-                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                          : site.status === 'busy'
-                            ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                            : 'bg-red-500/10 text-red-400 border-red-500/30'
-                      }`}
-                    >
-                      {statusOptions.find((option) => option.value === site.status)?.label}
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold whitespace-nowrap ${status.className}`}>
+                        {status.label}
+                      </span>
+                      <select
+                        value={normalizeSiteStatus(site.status)}
+                        onChange={(e) => void updateStatus(site.id, e.target.value as SiteStatus)}
+                        className="px-2 py-1 text-xs bg-obsidian-700 border border-obsidian-500 rounded text-slate-200 focus:outline-none focus:border-neon-orange"
+                      >
+                        {statusOptions.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </div>
                   </td>
                   <td className="px-3 py-2.5">
                     <button

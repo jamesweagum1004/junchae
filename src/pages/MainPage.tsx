@@ -8,6 +8,7 @@ import SearchBar from '../components/SearchBar';
 import AdsGrid from '../components/AdsGrid';
 import CategoryGrid from '../components/CategoryGrid';
 import AIBridgeOverlay from '../components/AIBridgeOverlay';
+import { getSiteStatusMeta } from '../lib/siteStatus';
 
 export default function MainPage() {
   const navigate = useNavigate();
@@ -130,6 +131,9 @@ export default function MainPage() {
 
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
               {featuredSites.map((site, index) => (
+                (() => {
+                  const status = getSiteStatusMeta(site.status, isSecure);
+                  return (
                 <button
                   key={site.id}
                   onClick={() => handleSiteClick(site.url, site.name)}
@@ -168,10 +172,10 @@ export default function MainPage() {
                       <div className={`text-sm sm:text-base font-black truncate ${isSecure ? 'text-white' : 'text-slate-900'}`}>
                         {site.name}
                       </div>
-                      <div className={`mt-0.5 flex items-center gap-1.5 text-[10px] ${isSecure ? 'text-slate-500' : 'text-slate-400'}`}>
-                        <span className={`w-1.5 h-1.5 rounded-full ${
-                          site.status === 'normal' ? 'bg-emerald-500' : site.status === 'busy' ? 'bg-amber-500' : 'bg-red-500'
-                        }`} />
+                      <div className={`mt-1 flex items-center gap-1.5 text-[10px] ${isSecure ? 'text-slate-500' : 'text-slate-400'}`}>
+                        <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-bold leading-none ${status.className}`}>
+                          {status.label}
+                        </span>
                         <span className="truncate">{site.categoryName}</span>
                       </div>
                       {site.description && (
@@ -182,6 +186,8 @@ export default function MainPage() {
                     </div>
                   </div>
                 </button>
+                  );
+                })()
               ))}
             </div>
           </section>

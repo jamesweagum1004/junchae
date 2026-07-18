@@ -5,20 +5,14 @@ import Header from '../components/Header';
 import AIBridgeOverlay from '../components/AIBridgeOverlay';
 import { useTheme } from '../context/ThemeContext';
 import { useData } from '../context/DataContext';
-import type { Site } from '../data/categories';
+import type { Category, Site } from '../data/categories';
+import { getSiteStatusMeta } from '../lib/siteStatus';
 
 const siteName = '전체닷컴';
 
-const statusDot: Record<string, { dark: string; light: string }> = {
-  normal: { dark: 'bg-emerald-400', light: 'bg-emerald-500' },
-  busy: { dark: 'bg-amber-400', light: 'bg-amber-500' },
-  slow: { dark: 'bg-red-400', light: 'bg-red-500' },
-};
-
-const statusLabel: Record<string, string> = {
-  normal: '정상',
-  busy: '혼잡',
-  slow: '지연',
+type FaqItem = {
+  question: string;
+  answer: string;
 };
 
 const getOrCreateMeta = (selector: string, attrs: Record<string, string>) => {
@@ -49,6 +43,25 @@ const safeDecode = (value: string) => {
   }
 };
 
+const parseFaq = (value: Category['seo_faq']): FaqItem[] => {
+  if (!value) return [];
+  const raw = Array.isArray(value) ? value : (() => {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return [];
+    }
+  })();
+
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => ({
+      question: typeof item?.question === 'string' ? item.question.trim() : '',
+      answer: typeof item?.answer === 'string' ? item.answer.trim() : '',
+    }))
+    .filter((item) => item.question && item.answer);
+};
+
 function SiteCard({
   site,
   isSecure,
@@ -58,7 +71,7 @@ function SiteCard({
   isSecure: boolean;
   onClick: (url: string, name: string) => void;
 }) {
-  const dot = isSecure ? statusDot[site.status]?.dark : statusDot[site.status]?.light;
+  const status = getSiteStatusMeta(site.status, isSecure);
   const description = site.seo_description || site.description;
 
   return (
@@ -105,9 +118,8 @@ function SiteCard({
           </div>
 
           <div className="mt-1 flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full ${dot || 'bg-slate-400'} pulse-dot`} />
-            <span className={`text-[10px] font-mono ${isSecure ? 'text-slate-500' : 'text-slate-400'}`}>
-              {statusLabel[site.status] || '상태'}
+            <span className={`rounded-full border px-1.5 py-0.5 text-[10px] font-bold leading-none ${status.className}`}>
+              {status.label}
             </span>
           </div>
 
@@ -140,23 +152,26 @@ export default function CategoryPage() {
     return categories.find((item) => item.name === categoryId);
   }, [categories, categoryId]);
 
+  const faqItems = useMemo(() => parseFaq(category?.seo_faq), [category?.seo_faq]);
+
   useEffect(() => {
     if (!category) return;
 
     const encodedCategoryId = encodeURIComponent(category.id);
-    const topSites = category.sites.slice(0, 3).map((site) => site.name).filter(Boolean).join(', ');
-    const title = `${category.name} 사이트 모음 | ${siteName}`;
-    const description = topSites
-      ? `${topSites} 등 ${category.name} 사이트 주소를 한 곳에서 확인하세요.`
-      : `${category.name} 사이트 주소를 한 곳에서 확인하세요.`;
+    const title = category.seo_title || `${category.name} 사이트 모음 - ${siteName}`;
+    const description =
+      category.seo_description ||
+      `${category.name} 카테고리의 주요 사이트를 빠르게 확인할 수 있는 링크 모음입니다.`;
     const canonical = `https://junchae.com/category/${encodedCategoryId}`;
 
     document.title = title;
     getOrCreateMeta('meta[name="description"]', { name: 'description' }).setAttribute('content', description);
+    getOrCreateMeta('meta[name="keywords"]', { name: 'keywords' }).setAttribute('content', category.seo_keywords || `${category.name}, 사이트 모음, 링크 모음`);
     getOrCreateMeta('meta[property="og:title"]', { property: 'og:title' }).setAttribute('content', title);
     getOrCreateMeta('meta[property="og:description"]', { property: 'og:description' }).setAttribute('content', description);
     getOrCreateMeta('meta[property="og:type"]', { property: 'og:type' }).setAttribute('content', 'website');
     getOrCreateMeta('meta[property="og:site_name"]', { property: 'og:site_name' }).setAttribute('content', siteName);
+    getOrCreateMeta('meta[property="og:url"]', { property: 'og:url' }).setAttribute('content', canonical);
     getOrCreateCanonical().href = canonical;
   }, [category]);
 
@@ -200,6 +215,9 @@ export default function CategoryPage() {
                   </p>
                 </div>
               </div>
+              <p className={`mt-3 max-w-3xl text-sm leading-relaxed ${isSecure ? 'text-slate-400' : 'text-slate-600'}`}>
+                {category.seo_intro || `${category.name} 카테고리의 주요 사이트를 한 곳에서 확인할 수 있습니다. 사이트명과 접속 상태를 빠르게 살펴보고 필요한 링크로 이동하세요.`}
+              </p>
             </section>
 
             <section className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-2 md:gap-4">
@@ -207,6 +225,31 @@ export default function CategoryPage() {
                 <SiteCard key={site.id} site={site} isSecure={isSecure} onClick={handleSiteClick} />
               ))}
             </section>
+
+            {faqItems.length > 0 && (
+              <section className="mt-8">
+                <h2 className={`text-base font-black tracking-tight ${isSecure ? 'text-white' : 'text-slate-900'}`}>
+                  자주 묻는 질문
+                </h2>
+                <div className="mt-3 space-y-2">
+                  {faqItems.map((item, index) => (
+                    <div
+                      key={`${item.question}-${index}`}
+                      className={`rounded-xl border p-4 ${
+                        isSecure ? 'glass-dark border-white/[0.08]' : 'glass-light border-slate-200/70'
+                      }`}
+                    >
+                      <h3 className={`text-sm font-bold ${isSecure ? 'text-slate-100' : 'text-slate-900'}`}>
+                        {item.question}
+                      </h3>
+                      <p className={`mt-2 text-sm leading-relaxed ${isSecure ? 'text-slate-400' : 'text-slate-600'}`}>
+                        {item.answer}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
           </>
         ) : (
           <section

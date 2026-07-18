@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useData } from '../context/DataContext';
+import { getSiteStatusMeta } from '../lib/siteStatus';
 
 interface SearchBarProps {
   onSiteClick: (url: string, name: string) => void;
@@ -58,33 +59,41 @@ export default function SearchBar({ onSiteClick }: SearchBarProps) {
             isSecure ? 'bg-obsidian-700 border-obsidian-500' : 'bg-white border-slate-200'
           }`}
         >
-          {filtered.slice(0, 8).map((site) => (
-            <button
-              key={site.id}
-              onClick={() => {
-                onSiteClick(site.url, site.name);
-                setQuery('');
-              }}
-              className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors ${
-                isSecure ? 'hover:bg-obsidian-600 text-slate-200' : 'hover:bg-slate-50 text-slate-700'
-              }`}
-            >
-              {/* Local-hosted favicon */}
-              <div className={`w-6 h-6 rounded flex items-center justify-center flex-shrink-0 overflow-hidden ${isSecure ? 'bg-obsidian-600' : 'bg-slate-100 border border-slate-200'}`}>
-                <img src={site.logo} alt="" className="w-4 h-4 object-contain" onError={(e) => {
-                  (e.target as HTMLImageElement).style.display = 'none';
-                  const parent = (e.target as HTMLImageElement).parentElement;
-                  if (parent) parent.innerHTML = `<span class="text-[10px] font-bold ${isSecure ? 'text-neon-orange' : 'text-slate-500'}">${site.name[0]}</span>`;
-                }} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="font-medium truncate">{site.name}</div>
-                <div className={`text-xs truncate ${isSecure ? 'text-slate-400' : 'text-slate-400'}`}>
-                  {site.description}
+          {filtered.slice(0, 8).map((site) => {
+            const status = getSiteStatusMeta(site.status, isSecure);
+            return (
+              <button
+                key={site.id}
+                onClick={() => {
+                  onSiteClick(site.url, site.name);
+                  setQuery('');
+                }}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors ${
+                  isSecure ? 'hover:bg-obsidian-600 text-slate-200' : 'hover:bg-slate-50 text-slate-700'
+                }`}
+              >
+                {/* Local-hosted favicon */}
+                <div className={`w-6 h-6 rounded flex items-center justify-center flex-shrink-0 overflow-hidden ${isSecure ? 'bg-obsidian-600' : 'bg-slate-100 border border-slate-200'}`}>
+                  <img src={site.logo} alt="" className="w-4 h-4 object-contain" onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = 'none';
+                    const parent = (e.target as HTMLImageElement).parentElement;
+                    if (parent) parent.innerHTML = `<span class="text-[10px] font-bold ${isSecure ? 'text-neon-orange' : 'text-slate-500'}">${site.name[0]}</span>`;
+                  }} />
                 </div>
-              </div>
-            </button>
-          ))}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium truncate">{site.name}</span>
+                    <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold leading-none ${status.className}`}>
+                      {status.label}
+                    </span>
+                  </div>
+                  <div className={`text-xs truncate ${isSecure ? 'text-slate-400' : 'text-slate-400'}`}>
+                    {site.description}
+                  </div>
+                </div>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

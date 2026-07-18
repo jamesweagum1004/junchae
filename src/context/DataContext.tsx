@@ -14,6 +14,7 @@ import {
 } from '../data/categories';
 import { useTheme } from './ThemeContext';
 import { adminAuthHeaders, isWriteRequest } from '../lib/adminApi';
+import { normalizeSiteStatus } from '../lib/siteStatus';
 
 export type MobileColumns = 1 | 2;
 type Mode = 'standard' | 'secure';
@@ -92,9 +93,6 @@ const toBooleanValue = (value: unknown) =>
 const apiMode = (mode: Mode): DbMode => (mode === 'secure' ? 'secure' : 'normal');
 const modeKey = (dbMode: unknown): Mode => (dbMode === 'secure' ? 'secure' : 'standard');
 
-const isSiteStatus = (value: unknown): value is Site['status'] =>
-  value === 'normal' || value === 'busy' || value === 'slow';
-
 const modeLabelColor = (mode: Mode) => (mode === 'secure' ? 'orange' : 'blue');
 
 const extractRows = (payload: unknown): ApiRow[] =>
@@ -144,6 +142,12 @@ const mapCategory = (row: ApiRow, fallbackIndex: number): Category => ({
   icon: 'FolderOpen',
   color: modeLabelColor(modeKey(row.mode)),
   sortOrder: Number(row.sort_order ?? row.sortOrder) || 0,
+  seo_title: toStringValue(row.seo_title),
+  seo_description: toStringValue(row.seo_description),
+  seo_keywords: toStringValue(row.seo_keywords),
+  seo_intro: toStringValue(row.seo_intro),
+  seo_faq: toStringValue(row.seo_faq),
+  seo_updated_at: toStringValue(row.seo_updated_at) || null,
   sites: [],
 });
 
@@ -153,7 +157,7 @@ const mapSite = (row: ApiRow, fallbackIndex: number): Site => ({
   name: toStringValue(row.name, 'Untitled Site'),
   url: toStringValue(row.url, '#'),
   logo: toStringValue(row.logo, '/uploads/logos/default.png'),
-  status: isSiteStatus(row.status) ? row.status : 'normal',
+  status: normalizeSiteStatus(row.status),
   description: toStringValue(row.description),
   seo_title: toStringValue(row.seo_title),
   seo_description: toStringValue(row.seo_description),

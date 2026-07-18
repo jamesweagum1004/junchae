@@ -1,4 +1,16 @@
-export type SiteStatus = 'normal' | 'busy' | 'slow';
+import type { CanonicalSiteStatus } from '../lib/siteStatus';
+
+export type SiteStatus =
+  | CanonicalSiteStatus
+  | 'active'
+  | 'congested'
+  | 'offline'
+  | 'unknown'
+  | 'slow'
+  | '정상'
+  | '혼잡'
+  | '접속불가'
+  | '확인중';
 export type DbMode = 'normal' | 'secure';
 
 export interface Site {
@@ -36,6 +48,12 @@ export interface Category {
   icon: string;
   color: string;
   sortOrder?: number;
+  seo_title?: string;
+  seo_description?: string;
+  seo_keywords?: string;
+  seo_intro?: string;
+  seo_faq?: string | { question: string; answer: string }[];
+  seo_updated_at?: string | null;
   sites: Site[];
 }
 
