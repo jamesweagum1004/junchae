@@ -20,6 +20,14 @@ export interface Site {
   seo_og_image?: string;
   seo_score?: number;
   seo_updated_at?: string | null;
+  is_hidden?: boolean;
+  isHidden?: boolean;
+  is_featured?: boolean;
+  isFeatured?: boolean;
+  featured_order?: number;
+  featuredOrder?: number;
+  sort_order?: number;
+  sortOrder?: number;
 }
 
 export interface Category {

@@ -82,6 +82,9 @@ const siteColumns = [
   'seo_og_image',
   'seo_score',
   'seo_updated_at',
+  'is_hidden',
+  'is_featured',
+  'featured_order',
   'sort_order',
   'created_at',
   'updated_at',
@@ -128,6 +131,13 @@ const seoColumns = [
   'seo_score',
 ];
 
+const siteControlColumns = [
+  'is_hidden',
+  'is_featured',
+  'featured_order',
+  'sort_order',
+];
+
 const editableSiteColumns = [
   'mode',
   'name',
@@ -136,6 +146,9 @@ const editableSiteColumns = [
   'description',
   'logo',
   'status',
+  'is_hidden',
+  'is_featured',
+  'featured_order',
   'sort_order',
   ...seoColumns,
 ];
@@ -353,7 +366,10 @@ function normalizeSiteInput(body) {
     description: normalizeOptionalText(body.description),
     logo: normalizeOptionalText(body.logo),
     status: normalizeOptionalText(body.status) || 'active',
-    sort_order: normalizeSortOrder(body.sort_order),
+    is_hidden: normalizeBooleanInt(body.is_hidden ?? body.isHidden, 0),
+    is_featured: normalizeBooleanInt(body.is_featured ?? body.isFeatured, 0),
+    featured_order: normalizeSortOrder(body.featured_order ?? body.featuredOrder),
+    sort_order: normalizeSortOrder(body.sort_order ?? body.sortOrder),
   };
 }
 
@@ -361,10 +377,23 @@ function pickEditableSiteUpdates(body) {
   const updates = {};
 
   editableSiteColumns.forEach((column) => {
-    if (!Object.prototype.hasOwnProperty.call(body, column)) return;
+    const aliases = {
+      sort_order: ['sort_order', 'sortOrder'],
+      is_hidden: ['is_hidden', 'isHidden'],
+      is_featured: ['is_featured', 'isFeatured'],
+      featured_order: ['featured_order', 'featuredOrder'],
+    };
+    const keys = aliases[column] || [column];
+    if (!keys.some((key) => Object.prototype.hasOwnProperty.call(body, key))) return;
 
     if (column === 'sort_order') {
-      updates[column] = normalizeSortOrder(body[column]);
+      updates[column] = normalizeSortOrder(body.sort_order ?? body.sortOrder);
+    } else if (column === 'featured_order') {
+      updates[column] = normalizeSortOrder(body.featured_order ?? body.featuredOrder);
+    } else if (column === 'is_hidden') {
+      updates[column] = normalizeBooleanInt(body.is_hidden ?? body.isHidden, 0);
+    } else if (column === 'is_featured') {
+      updates[column] = normalizeBooleanInt(body.is_featured ?? body.isFeatured, 0);
     } else if (column === 'seo_score') {
       updates[column] = normalizeSeoScore(body[column]);
     } else if (column === 'mode') {
@@ -488,6 +517,10 @@ async function initializeDatabase() {
   await ensureColumn('sites', 'seo_og_image', 'VARCHAR(500) NULL', 'seo_og_description');
   await ensureColumn('sites', 'seo_score', 'INT NOT NULL DEFAULT 0', 'seo_og_image');
   await ensureColumn('sites', 'seo_updated_at', 'TIMESTAMP NULL', 'seo_score');
+  await ensureColumn('sites', 'sort_order', 'INT NOT NULL DEFAULT 0', 'status');
+  await ensureColumn('sites', 'is_hidden', 'TINYINT(1) NOT NULL DEFAULT 0', 'sort_order');
+  await ensureColumn('sites', 'is_featured', 'TINYINT(1) NOT NULL DEFAULT 0', 'is_hidden');
+  await ensureColumn('sites', 'featured_order', 'INT NOT NULL DEFAULT 0', 'is_featured');
   await db.execute("UPDATE sites SET mode = 'normal' WHERE mode IS NULL OR mode = ''");
 
   await db.execute(`
@@ -839,7 +872,7 @@ app.get('/api/sites', asyncRoute(async (req, res) => {
   }
 
   const [rows] = await db.execute(
-    `SELECT ${siteColumns.join(', ')} FROM sites ${where} ORDER BY sort_order ASC, id ASC`,
+    `SELECT ${siteColumns.join(', ')} FROM sites ${where} ORDER BY category ASC, sort_order ASC, name ASC, id ASC`,
     values
   );
   res.json({ ok: true, data: rows });
@@ -865,6 +898,21 @@ app.patch('/api/sites/:id/seo', requireAdminToken, asyncRoute(async (req, res) =
     updates[column] = column === 'seo_score'
       ? normalizeSeoScore(req.body[column])
       : normalizeOptionalText(req.body[column]);
+  });
+  siteControlColumns.forEach((column) => {
+    const aliases = {
+      sort_order: ['sort_order', 'sortOrder'],
+      is_hidden: ['is_hidden', 'isHidden'],
+      is_featured: ['is_featured', 'isFeatured'],
+      featured_order: ['featured_order', 'featuredOrder'],
+    };
+    const keys = aliases[column] || [column];
+    if (!keys.some((key) => Object.prototype.hasOwnProperty.call(req.body || {}, key))) return;
+    if (column === 'is_hidden' || column === 'is_featured') {
+      updates[column] = normalizeBooleanInt(req.body[column] ?? req.body[aliases[column][1]], 0);
+    } else {
+      updates[column] = normalizeSortOrder(req.body[column] ?? req.body[aliases[column][1]]);
+    }
   });
   updates.seo_updated_at = new Date();
 
@@ -1386,8 +1434,9 @@ app.post('/api/sites', requireAdminToken, asyncRoute(async (req, res) => {
   }
 
   const [result] = await db.execute(
-    `INSERT INTO sites (mode, name, url, category, description, logo, status, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO sites
+     (mode, name, url, category, description, logo, status, is_hidden, is_featured, featured_order, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       site.mode,
       site.name,
@@ -1396,6 +1445,9 @@ app.post('/api/sites', requireAdminToken, asyncRoute(async (req, res) => {
       site.description,
       site.logo,
       site.status,
+      site.is_hidden,
+      site.is_featured,
+      site.featured_order,
       site.sort_order,
     ]
   );
@@ -1437,7 +1489,80 @@ async function saveSiteUpdates(req, res) {
 
 app.put('/api/sites/:id', requireAdminToken, asyncRoute(saveSiteUpdates));
 
+app.patch('/api/sites/reorder', requireAdminToken, asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.body?.mode);
+  const category = normalizeOptionalText(req.body?.category);
+  const siteIds = Array.isArray(req.body?.siteIds) ? req.body.siteIds.map(parseId) : [];
+
+  if (!category) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'category is required.');
+  }
+  if (siteIds.length === 0 || siteIds.some((id) => !id)) {
+    return jsonError(res, 400, 'INVALID_ID', 'siteIds must contain valid numeric ids.');
+  }
+
+  const connection = await db.getConnection();
+  try {
+    await connection.beginTransaction();
+    for (const [index, id] of siteIds.entries()) {
+      await connection.execute(
+        'UPDATE sites SET sort_order = ? WHERE id = ? AND mode = ? AND category = ?',
+        [index, id, mode, category]
+      );
+    }
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+
+  const [rows] = await db.execute(
+    `SELECT ${siteColumns.join(', ')}
+     FROM sites
+     WHERE mode = ? AND category = ?
+     ORDER BY sort_order ASC, name ASC, id ASC`,
+    [mode, category]
+  );
+  return res.json({ ok: true, data: rows });
+}));
+
 app.patch('/api/sites/:id', requireAdminToken, asyncRoute(saveSiteUpdates));
+
+app.patch('/api/sites/:id/visibility', requireAdminToken, asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const isHidden = normalizeBooleanInt(req.body?.is_hidden ?? req.body?.isHidden, 0);
+  const [result] = await db.execute('UPDATE sites SET is_hidden = ? WHERE id = ?', [isHidden, id]);
+  if (result.affectedRows === 0) {
+    return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+  }
+
+  const updated = await getSiteById(id);
+  return res.json({ ok: true, data: updated });
+}));
+
+app.patch('/api/sites/:id/featured', requireAdminToken, asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const isFeatured = normalizeBooleanInt(req.body?.is_featured ?? req.body?.isFeatured, 0);
+  const featuredOrder = isFeatured
+    ? normalizeSortOrder(req.body?.featured_order ?? req.body?.featuredOrder)
+    : 0;
+  const [result] = await db.execute(
+    'UPDATE sites SET is_featured = ?, featured_order = ? WHERE id = ?',
+    [isFeatured, featuredOrder, id]
+  );
+  if (result.affectedRows === 0) {
+    return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+  }
+
+  const updated = await getSiteById(id);
+  return res.json({ ok: true, data: updated });
+}));
 
 app.patch('/api/sites/:id/status', requireAdminToken, asyncRoute(async (req, res) => {
   const id = parseId(req.params.id);

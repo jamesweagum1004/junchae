@@ -1,12 +1,17 @@
 import { useMemo, useRef, useState } from 'react';
 import {
+  ArrowDown,
+  ArrowUp,
   Check,
   CheckCircle,
   Download,
   Edit3,
+  Eye,
+  EyeOff,
   ExternalLink,
   Link2,
   Plus,
+  Star,
   Trash2,
   Upload,
   X,
@@ -40,11 +45,14 @@ export default function SiteManager() {
     updateSiteUrlInMode,
     updateSiteNameInMode,
     updateSiteCategoryInMode,
+    updateSiteInMode,
+    reorderSitesInMode,
   } = useData();
 
   const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('standard');
   const { categories } = getModeData(activeMode);
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [stateFilter, setStateFilter] = useState<'all' | 'visible' | 'hidden' | 'featured'>('all');
   const allSites: (Site & { categoryId: string; categoryName: string })[] = useMemo(
     () => categories.flatMap((category) =>
       (Array.isArray(category.sites) ? category.sites : []).map((site) => ({
@@ -55,9 +63,18 @@ export default function SiteManager() {
     ),
     [categories]
   );
-  const filteredSites = categoryFilter === 'all'
-    ? allSites
-    : allSites.filter((site) => site.categoryName === categoryFilter || site.categoryId === categoryFilter);
+  const filteredSites = allSites.filter((site) => {
+    const categoryMatches =
+      categoryFilter === 'all' ||
+      site.categoryName === categoryFilter ||
+      site.categoryId === categoryFilter;
+    const stateMatches =
+      stateFilter === 'all' ||
+      (stateFilter === 'visible' && !site.isHidden && !site.is_hidden) ||
+      (stateFilter === 'hidden' && (site.isHidden || site.is_hidden)) ||
+      (stateFilter === 'featured' && (site.isFeatured || site.is_featured));
+    return categoryMatches && stateMatches;
+  });
 
   const [form, setForm] = useState({
     name: '',
@@ -237,6 +254,93 @@ export default function SiteManager() {
     }
   };
 
+  const toggleVisibility = async (site: Site) => {
+    try {
+      await updateSiteInMode(activeMode, site.id, {
+        is_hidden: !(site.isHidden || site.is_hidden),
+      });
+    } catch (err) {
+      showError('사이트 노출 상태 변경에 실패했습니다.', err);
+    }
+  };
+
+  const toggleFeatured = async (site: Site) => {
+    try {
+      const nextFeatured = !(site.isFeatured || site.is_featured);
+      const nextOrder = nextFeatured
+        ? Math.max(
+            0,
+            ...allSites
+              .filter((item) => item.isFeatured || item.is_featured)
+              .map((item) => item.featuredOrder ?? item.featured_order ?? 0)
+          ) + 1
+        : 0;
+      await updateSiteInMode(activeMode, site.id, {
+        is_featured: nextFeatured,
+        featured_order: nextOrder,
+      });
+    } catch (err) {
+      showError('TOP10 상태 변경에 실패했습니다.', err);
+    }
+  };
+
+  const updateFeaturedOrder = async (site: Site, value: string) => {
+    const featuredOrder = Number(value);
+    if (!Number.isFinite(featuredOrder)) return;
+    try {
+      await updateSiteInMode(activeMode, site.id, {
+        is_featured: true,
+        featured_order: Math.max(0, Math.trunc(featuredOrder)),
+      });
+    } catch (err) {
+      showError('TOP10 순서 변경에 실패했습니다.', err);
+    }
+  };
+
+  const moveFeatured = async (site: Site, direction: -1 | 1) => {
+    const featured = allSites
+      .filter((item) => item.isFeatured || item.is_featured)
+      .sort((a, b) =>
+        (a.featuredOrder ?? a.featured_order ?? 0) - (b.featuredOrder ?? b.featured_order ?? 0) ||
+        a.name.localeCompare(b.name)
+      );
+    const index = featured.findIndex((item) => item.id === site.id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= featured.length) return;
+
+    try {
+      const currentOrder = featured[index].featuredOrder ?? featured[index].featured_order ?? index + 1;
+      const targetOrder = featured[target].featuredOrder ?? featured[target].featured_order ?? target + 1;
+      await Promise.all([
+        updateSiteInMode(activeMode, featured[index].id, { featured_order: targetOrder }),
+        updateSiteInMode(activeMode, featured[target].id, { featured_order: currentOrder }),
+      ]);
+    } catch (err) {
+      showError('TOP10 순서 변경에 실패했습니다.', err);
+    }
+  };
+
+  const moveSiteInCategory = async (site: Site & { categoryName: string }, direction: -1 | 1) => {
+    const categorySites = allSites
+      .filter((item) => item.categoryName === site.categoryName)
+      .sort((a, b) =>
+        (a.sortOrder ?? a.sort_order ?? 0) - (b.sortOrder ?? b.sort_order ?? 0) ||
+        a.name.localeCompare(b.name)
+      );
+    const index = categorySites.findIndex((item) => item.id === site.id);
+    const target = index + direction;
+    if (index < 0 || target < 0 || target >= categorySites.length) return;
+
+    const nextIds = categorySites.map((item) => item.id);
+    [nextIds[index], nextIds[target]] = [nextIds[target], nextIds[index]];
+
+    try {
+      await reorderSitesInMode(activeMode, site.categoryName, nextIds);
+    } catch (err) {
+      showError('사이트 순서 변경에 실패했습니다.', err);
+    }
+  };
+
   const activeLogoSite = allSites.find((site) => site.id === logoModal);
 
   return (
@@ -306,7 +410,7 @@ export default function SiteManager() {
         </button>
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-slate-500">카테고리 필터</span>
         <select
           value={categoryFilter}
@@ -318,13 +422,24 @@ export default function SiteManager() {
             <option key={category.id} value={category.name}>{category.name}</option>
           ))}
         </select>
+        <select
+          value={stateFilter}
+          onChange={(e) => setStateFilter(e.target.value as typeof stateFilter)}
+          className="px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
+        >
+          <option value="all">전체</option>
+          <option value="visible">노출 중</option>
+          <option value="hidden">숨김</option>
+          <option value="featured">TOP10</option>
+        </select>
+        <span className="text-xs text-slate-500">{filteredSites.length}/{allSites.length}</span>
       </div>
 
       <div className="overflow-x-auto rounded-xl border border-obsidian-500">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-obsidian-500 bg-obsidian-600">
-              {['로고', '사이트명', '카테고리', '이동 URL', '상태', '로고', ''].map((header) => (
+              {['로고', '사이트명', '카테고리', '이동 URL', '상태', '노출', 'TOP10', '순서', '로고', ''].map((header) => (
                 <th key={header} className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
                   {header}
                 </th>
@@ -336,9 +451,12 @@ export default function SiteManager() {
               const categoryOptions = categories.some((category) => category.name === site.categoryName)
                 ? categories
                 : [...categories, { id: site.categoryName, name: site.categoryName, icon: 'FolderOpen', color: 'blue', sites: [] }];
+              const isHidden = site.isHidden || site.is_hidden;
+              const isFeatured = site.isFeatured || site.is_featured;
+              const featuredOrder = site.featuredOrder ?? site.featured_order ?? 0;
 
               return (
-                <tr key={site.id} className="border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors">
+                <tr key={site.id} className={`border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors ${isHidden ? 'opacity-55' : ''}`}>
                   <td className="px-3 py-2.5">
                     <div className="w-8 h-8 rounded bg-white/90 border border-obsidian-500 flex items-center justify-center overflow-hidden p-1">
                       {site.logo ? (
@@ -378,6 +496,11 @@ export default function SiteManager() {
                     ) : (
                       <div className="flex items-center gap-1.5">
                         <span className="text-slate-200 font-medium whitespace-nowrap">{site.name}</span>
+                        {isHidden && (
+                          <span className="px-1.5 py-0.5 rounded-full bg-slate-700 text-[10px] font-bold text-slate-300 border border-slate-600">
+                            숨김
+                          </span>
+                        )}
                         <button
                           onClick={() => {
                             setEditingNameId(site.id);
@@ -453,6 +576,77 @@ export default function SiteManager() {
                     >
                       {statusOptions.find((option) => option.value === site.status)?.label}
                     </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <button
+                      onClick={() => void toggleVisibility(site)}
+                      className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border text-xs font-bold transition-colors whitespace-nowrap ${
+                        isHidden
+                          ? 'bg-slate-700/70 text-slate-300 border-slate-600 hover:border-slate-400'
+                          : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:border-emerald-400'
+                      }`}
+                    >
+                      {isHidden ? <EyeOff size={12} /> : <Eye size={12} />}
+                      {isHidden ? '숨김' : '노출 중'}
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => void toggleFeatured(site)}
+                        className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-lg border text-xs font-bold transition-colors whitespace-nowrap ${
+                          isFeatured
+                            ? 'bg-amber-500/10 text-amber-300 border-amber-500/40 hover:border-amber-300'
+                            : 'bg-obsidian-700 text-slate-400 border-obsidian-500 hover:border-neon-orange/50'
+                        }`}
+                      >
+                        <Star size={12} fill={isFeatured ? 'currentColor' : 'none'} />
+                        {isFeatured ? 'TOP10' : '일반'}
+                      </button>
+                      {isFeatured && (
+                        <>
+                          <input
+                            type="number"
+                            min={0}
+                            defaultValue={featuredOrder}
+                            onBlur={(e) => void updateFeaturedOrder(site, e.target.value)}
+                            className="w-14 px-2 py-1 text-xs bg-obsidian-700 border border-obsidian-500 rounded text-white focus:outline-none focus:border-neon-orange"
+                          />
+                          <button
+                            onClick={() => void moveFeatured(site, -1)}
+                            className="p-1 text-slate-500 hover:text-amber-300 transition-colors"
+                            title="TOP10 위로"
+                          >
+                            <ArrowUp size={13} />
+                          </button>
+                          <button
+                            onClick={() => void moveFeatured(site, 1)}
+                            className="p-1 text-slate-500 hover:text-amber-300 transition-colors"
+                            title="TOP10 아래로"
+                          >
+                            <ArrowDown size={13} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => void moveSiteInCategory(site, -1)}
+                        className="p-1 text-slate-500 hover:text-neon-orange transition-colors"
+                        title="카테고리 내 위로"
+                      >
+                        <ArrowUp size={14} />
+                      </button>
+                      <button
+                        onClick={() => void moveSiteInCategory(site, 1)}
+                        className="p-1 text-slate-500 hover:text-neon-orange transition-colors"
+                        title="카테고리 내 아래로"
+                      >
+                        <ArrowDown size={14} />
+                      </button>
+                    </div>
                   </td>
                   <td className="px-3 py-2.5">
                     <button

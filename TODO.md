@@ -18,6 +18,15 @@
 - [x] Add AI SEO Center.
 - [x] Add mode-aware Global SEO settings for the homepage.
 - [x] Connect bridge ads settings.
+- [x] Add site visibility soft-hide toggle.
+- [x] Add manual TOP10 site selection.
+- [x] Add manual TOP10 order management.
+- [x] Add category-level site ordering.
+- [x] Add mobile two-column compact site UI.
+- [ ] Automate rankings from real click counts.
+- [ ] Add n8n link status auto-checking.
+- [ ] Add automatic `last_checked_at` and `status` updates.
+- [ ] Improve admin sorting with drag and drop.
 - [ ] Harden admin authentication and persist admin account settings on the server.
 - [ ] Encrypt stored secret settings at rest.
 - [ ] Add SSR or static SEO page generation for stronger per-page indexing.

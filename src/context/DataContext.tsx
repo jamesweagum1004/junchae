@@ -17,7 +17,13 @@ import { adminAuthHeaders, isWriteRequest } from '../lib/adminApi';
 
 export type MobileColumns = 1 | 2;
 type Mode = 'standard' | 'secure';
-type SiteUpdatePayload = Partial<Omit<Site, 'id'>> & { category?: string; sort_order?: number };
+type SiteUpdatePayload = Partial<Omit<Site, 'id'>> & {
+  category?: string;
+  is_hidden?: boolean | number;
+  is_featured?: boolean | number;
+  featured_order?: number;
+  sort_order?: number;
+};
 
 interface DataContextType {
   categories: Category[];
@@ -54,6 +60,7 @@ interface DataContextType {
   removeCategoryInMode: (mode: Mode, categoryId: string) => Promise<void>;
   updateCategoryNameInMode: (mode: Mode, categoryId: string, name: string) => Promise<void>;
   reorderCategoriesInMode: (mode: Mode, categoryIds: string[]) => Promise<void>;
+  reorderSitesInMode: (mode: Mode, categoryName: string, siteIds: number[]) => Promise<void>;
   updateAdInMode: (mode: Mode, adId: number, updates: Partial<Ad>) => Promise<void>;
   addAdInMode: (mode: Mode, ad: Omit<Ad, 'id'>) => Promise<void>;
   removeAdInMode: (mode: Mode, adId: number) => Promise<void>;
@@ -78,6 +85,9 @@ const isRecord = (value: unknown): value is ApiRow =>
 
 const toStringValue = (value: unknown, fallback = '') =>
   typeof value === 'string' && value.trim() ? value.trim() : fallback;
+
+const toBooleanValue = (value: unknown) =>
+  value === true || value === 1 || value === '1' || value === 'true';
 
 const apiMode = (mode: Mode): DbMode => (mode === 'secure' ? 'secure' : 'normal');
 const modeKey = (dbMode: unknown): Mode => (dbMode === 'secure' ? 'secure' : 'standard');
@@ -156,6 +166,14 @@ const mapSite = (row: ApiRow, fallbackIndex: number): Site => ({
   seo_og_image: toStringValue(row.seo_og_image),
   seo_score: Number(row.seo_score) || 0,
   seo_updated_at: toStringValue(row.seo_updated_at) || null,
+  is_hidden: toBooleanValue(row.is_hidden ?? row.isHidden),
+  isHidden: toBooleanValue(row.is_hidden ?? row.isHidden),
+  is_featured: toBooleanValue(row.is_featured ?? row.isFeatured),
+  isFeatured: toBooleanValue(row.is_featured ?? row.isFeatured),
+  featured_order: Number(row.featured_order ?? row.featuredOrder) || 0,
+  featuredOrder: Number(row.featured_order ?? row.featuredOrder) || 0,
+  sort_order: Number(row.sort_order ?? row.sortOrder) || 0,
+  sortOrder: Number(row.sort_order ?? row.sortOrder) || 0,
 });
 
 const mapAd = (row: ApiRow): Ad => ({
@@ -218,8 +236,21 @@ const buildCategories = (categories: Category[], siteRows: ApiRow[]) => {
     category.sites.push(mapSite(row, index));
   });
 
+  next.forEach((category) => {
+    category.sites.sort((a, b) =>
+      (a.sortOrder ?? a.sort_order ?? 0) - (b.sortOrder ?? b.sort_order ?? 0) ||
+      a.name.localeCompare(b.name)
+    );
+  });
+
   return next.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name));
 };
+
+const hideHiddenSites = (categories: Category[]) =>
+  categories.map((category) => ({
+    ...category,
+    sites: category.sites.filter((site) => !site.isHidden && !site.is_hidden),
+  }));
 
 const adPayload = (mode: Mode, ad: Partial<Ad>) => ({
   mode: apiMode(mode),
@@ -255,6 +286,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const { mode } = useTheme();
   const [stdCats, setStdCats] = useState<Category[]>(standardCategories);
   const [secCats, setSecCats] = useState<Category[]>(secureCategories);
+  const [stdAdminCats, setStdAdminCats] = useState<Category[]>(standardCategories);
+  const [secAdminCats, setSecAdminCats] = useState<Category[]>(secureCategories);
   const [stdAds, setStdAds] = useState<Ad[]>(standardAds);
   const [secAds, setSecAds] = useState<Ad[]>(secureAds);
   const [stdInterAds, setStdInterAds] = useState<InterAd[]>(standardInterAds);
@@ -336,8 +369,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
       loadModeCatalog('standard'),
       loadModeCatalog('secure'),
     ]);
-    setStdCats(standard);
-    setSecCats(secure);
+    setStdAdminCats(standard);
+    setSecAdminCats(secure);
+    setStdCats(hideHiddenSites(standard));
+    setSecCats(hideHiddenSites(secure));
   }, [loadModeCatalog]);
 
   const reloadAds = useCallback(async () => {
@@ -465,6 +500,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
     await reloadCatalog();
   }, [reloadCatalog]);
 
+  const reorderSitesInMode = useCallback(async (m: Mode, categoryName: string, siteIds: number[]) => {
+    await apiRequest('/api/sites/reorder', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        mode: apiMode(m),
+        category: categoryName,
+        siteIds,
+      }),
+    });
+    await reloadCatalog();
+  }, [reloadCatalog]);
+
   const addAdInMode = useCallback(async (m: Mode, ad: Omit<Ad, 'id'>) => {
     await apiRequest('/api/ads', {
       method: 'POST',
@@ -542,10 +589,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
     ), [categories]);
 
   const getModeData = useCallback((m: Mode) => ({
-    categories: m === 'secure' ? secCats : stdCats,
+    categories: m === 'secure' ? secAdminCats : stdAdminCats,
     ads: m === 'secure' ? secAds : stdAds,
     interAds: m === 'secure' ? secInterAds : stdInterAds,
-  }), [secAds, secCats, secInterAds, stdAds, stdCats, stdInterAds]);
+  }), [secAds, secAdminCats, secInterAds, stdAds, stdAdminCats, stdInterAds]);
 
   const updateSiteLogo = useCallback((siteId: number, logoPath: string) => updateSiteLogoInMode(mode, siteId, logoPath), [mode, updateSiteLogoInMode]);
   const updateSiteStatus = useCallback((siteId: number, status: Site['status']) => updateSiteStatusInMode(mode, siteId, status), [mode, updateSiteStatusInMode]);
@@ -597,6 +644,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
         removeCategoryInMode,
         updateCategoryNameInMode,
         reorderCategoriesInMode,
+        reorderSitesInMode,
         updateAdInMode,
         addAdInMode,
         removeAdInMode,

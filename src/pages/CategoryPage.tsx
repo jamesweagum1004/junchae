@@ -64,15 +64,15 @@ function SiteCard({
   return (
     <button
       onClick={() => onClick(site.url, site.name)}
-      className={`group w-full rounded-2xl border p-4 text-left transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] ${
+      className={`group w-full min-h-[72px] md:min-h-0 rounded-xl md:rounded-2xl border p-2.5 md:p-4 text-left transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] ${
         isSecure
           ? 'glass-dark border-white/[0.08] hover:border-neon-orange/30'
           : 'glass-light border-slate-200/70 hover:border-blue-300'
       }`}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex items-center md:items-start gap-2 md:gap-3">
         <div
-          className={`squircle w-14 h-14 flex items-center justify-center flex-shrink-0 overflow-hidden bg-white/90 border p-1.5 ${
+          className={`squircle w-9 h-9 md:w-14 md:h-14 flex items-center justify-center flex-shrink-0 overflow-hidden bg-white/90 border p-1 md:p-1.5 ${
             isSecure ? 'border-white/[0.12] logo-placeholder-glow' : 'border-slate-300/70 logo-placeholder-glow'
           }`}
         >
@@ -93,12 +93,12 @@ function SiteCard({
 
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-3">
-            <h2 className={`text-base font-black tracking-tight truncate ${isSecure ? 'text-white' : 'text-slate-900'}`}>
+            <h2 className={`text-sm md:text-base font-black tracking-tight truncate ${isSecure ? 'text-white' : 'text-slate-900'}`}>
               {site.name}
             </h2>
             <ExternalLink
               size={15}
-              className={`mt-0.5 flex-shrink-0 transition-colors ${
+              className={`hidden md:block mt-0.5 flex-shrink-0 transition-colors ${
                 isSecure ? 'text-slate-600 group-hover:text-neon-orange' : 'text-slate-400 group-hover:text-blue-600'
               }`}
             />
@@ -112,7 +112,7 @@ function SiteCard({
           </div>
 
           {description && (
-            <p className={`mt-2 text-sm leading-relaxed line-clamp-2 ${isSecure ? 'text-slate-400' : 'text-slate-600'}`}>
+            <p className={`hidden md:block mt-2 text-sm leading-relaxed line-clamp-2 ${isSecure ? 'text-slate-400' : 'text-slate-600'}`}>
               {description}
             </p>
           )}
@@ -183,7 +183,7 @@ export default function CategoryPage() {
 
         {category ? (
           <>
-            <section className="mt-6 mb-5">
+            <section className="mt-4 sm:mt-6 mb-4 sm:mb-5">
               <div className="flex items-center gap-2 mb-2">
                 <ShieldCheck size={15} className={isSecure ? 'text-neon-orange' : 'text-blue-600'} />
                 <span className={`text-xs font-semibold uppercase tracking-widest ${isSecure ? 'text-neon-orange/70' : 'text-slate-400'}`}>
@@ -202,7 +202,7 @@ export default function CategoryPage() {
               </div>
             </section>
 
-            <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <section className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-2 md:gap-4">
               {category.sites.map((site) => (
                 <SiteCard key={site.id} site={site} isSecure={isSecure} onClick={handleSiteClick} />
               ))}

@@ -65,14 +65,14 @@ function SiteRow({ site, isSecure, onClick }: SiteRowProps) {
   return (
     <button
       onClick={() => onClick(site.url, site.name)}
-      className={`group w-full flex items-center gap-2.5 px-2.5 py-2 sm:px-3 sm:py-2.5 rounded-xl text-left transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] ${
+      className={`group w-full min-h-[58px] md:min-h-0 flex items-center gap-2 px-2 py-2 md:gap-2.5 md:px-3 md:py-2.5 rounded-lg md:rounded-xl text-left transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] ${
         isSecure
           ? 'hover:bg-white/[0.04] text-slate-400 hover:text-white'
           : 'hover:bg-slate-200/40 text-slate-600 hover:text-slate-900'
       }`}
     >
       <div
-        className={`squircle w-12 h-12 flex items-center justify-center flex-shrink-0 overflow-hidden relative transition-transform duration-200 group-hover:scale-105 bg-white/90 border p-1.5 ${
+        className={`squircle w-8 h-8 md:w-12 md:h-12 flex items-center justify-center flex-shrink-0 overflow-hidden relative transition-transform duration-200 group-hover:scale-105 bg-white/90 border p-1 md:p-1.5 ${
           isSecure
             ? 'border-white/[0.12] logo-placeholder-glow'
             : 'border-slate-300/70 logo-placeholder-glow'
@@ -99,7 +99,7 @@ function SiteRow({ site, isSecure, onClick }: SiteRowProps) {
         )}
       </div>
 
-      <span className={`flex-1 text-[15px] sm:text-base font-bold tracking-tight leading-tight whitespace-nowrap overflow-hidden text-ellipsis ${
+      <span className={`flex-1 text-[13px] md:text-base font-bold tracking-tight leading-tight whitespace-nowrap overflow-hidden text-ellipsis ${
         isSecure ? 'text-slate-100' : 'text-slate-900'
       }`}>
         {site.name}
@@ -107,7 +107,7 @@ function SiteRow({ site, isSecure, onClick }: SiteRowProps) {
 
       <div className="flex items-center gap-1 shrink-0">
         <span className={`w-1.5 h-1.5 rounded-full ${dot || 'bg-slate-400'} pulse-dot`} />
-        <span className={`text-[9px] font-medium ${isSecure ? 'text-slate-500' : 'text-slate-400'}`}>
+        <span className={`hidden sm:inline text-[9px] font-medium ${isSecure ? 'text-slate-500' : 'text-slate-400'}`}>
           {statusLabel[site.status] || '상태'}
         </span>
       </div>
@@ -222,7 +222,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                 </span>
               </div>
 
-              <div className="space-y-0.5">
+              <div className="grid grid-cols-2 gap-2 md:flex md:flex-col md:gap-0.5">
                 {visibleSites.map((site) => (
                   <SiteRow key={site.id} site={site} isSecure={isSecure} onClick={onSiteClick} />
                 ))}

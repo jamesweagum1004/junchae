@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Globe, ChevronRight, AlertTriangle, ShieldCheck, Lock, MessageCircle } from 'lucide-react';
+import { Globe, ChevronRight, AlertTriangle, ShieldCheck, Lock, MessageCircle, Trophy } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { useData } from '../context/DataContext';
@@ -13,6 +13,19 @@ export default function MainPage() {
   const navigate = useNavigate();
   const { isSecure, setMode } = useTheme();
   const { categories, secureCategories, telegramLink, telegramVisible } = useData();
+  const featuredSites = categories
+    .flatMap((category) =>
+      category.sites.map((site) => ({
+        ...site,
+        categoryName: category.name,
+      }))
+    )
+    .filter((site) => (site.isFeatured || site.is_featured) && !site.isHidden && !site.is_hidden)
+    .sort((a, b) =>
+      (a.featuredOrder ?? a.featured_order ?? 0) - (b.featuredOrder ?? b.featured_order ?? 0) ||
+      a.name.localeCompare(b.name)
+    )
+    .slice(0, 10);
 
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
 
@@ -104,6 +117,75 @@ export default function MainPage() {
           </div>
 
         </section>
+
+        {featuredSites.length > 0 && (
+          <section className="clear-both">
+            <div className="flex items-center gap-2 mb-3">
+              <Trophy size={14} className={isSecure ? 'text-neon-orange' : 'text-blue-600'} />
+              <span className={`text-xs font-semibold uppercase tracking-widest ${isSecure ? 'text-neon-orange/70' : 'text-slate-500'}`}>
+                {isSecure ? '추천 주소 TOP10' : '인기 사이트 TOP10'}
+              </span>
+              <ChevronRight size={12} className={isSecure ? 'text-slate-600' : 'text-slate-300'} />
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-3">
+              {featuredSites.map((site, index) => (
+                <button
+                  key={site.id}
+                  onClick={() => handleSiteClick(site.url, site.name)}
+                  className={`group min-h-[72px] sm:min-h-[104px] rounded-xl sm:rounded-2xl border px-2.5 py-2.5 sm:p-4 text-left transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] ${
+                    isSecure
+                      ? 'glass-dark border-white/[0.08] hover:border-neon-orange/35'
+                      : 'glass-light border-slate-200/70 hover:border-blue-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 sm:flex-col sm:items-start">
+                    <div className="flex items-center gap-2 min-w-0 flex-1 sm:w-full">
+                      <span className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-black flex-shrink-0 ${
+                        isSecure ? 'bg-neon-orange/15 text-neon-orange' : 'bg-blue-50 text-blue-700'
+                      }`}>
+                        {index + 1}
+                      </span>
+                      <div className={`w-8 h-8 sm:w-11 sm:h-11 rounded-lg bg-white/90 border flex items-center justify-center overflow-hidden p-1 flex-shrink-0 ${
+                        isSecure ? 'border-white/[0.12]' : 'border-slate-300/70'
+                      }`}>
+                        {site.logo ? (
+                          <img
+                            src={site.logo}
+                            alt={site.name}
+                            className="w-full h-full object-contain"
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).style.display = 'none';
+                            }}
+                          />
+                        ) : (
+                          <span className="text-xs font-bold text-neon-orange">{site.name.charAt(0) || '?'}</span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="min-w-0 flex-1 sm:w-full">
+                      <div className={`text-sm sm:text-base font-black truncate ${isSecure ? 'text-white' : 'text-slate-900'}`}>
+                        {site.name}
+                      </div>
+                      <div className={`mt-0.5 flex items-center gap-1.5 text-[10px] ${isSecure ? 'text-slate-500' : 'text-slate-400'}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${
+                          site.status === 'normal' ? 'bg-emerald-500' : site.status === 'busy' ? 'bg-amber-500' : 'bg-red-500'
+                        }`} />
+                        <span className="truncate">{site.categoryName}</span>
+                      </div>
+                      {site.description && (
+                        <p className={`hidden sm:block mt-2 text-xs line-clamp-1 ${isSecure ? 'text-slate-500' : 'text-slate-500'}`}>
+                          {site.description}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Premium Ads */}
         <section className="clear-both">
