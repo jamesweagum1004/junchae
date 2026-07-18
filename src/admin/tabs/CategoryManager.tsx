@@ -19,6 +19,8 @@ type GeneratedCategorySeo = {
   seo_keywords?: string;
   seo_intro?: string;
   seo_faq: { question: string; answer: string }[] | string;
+  fallback?: boolean;
+  message?: string;
 };
 
 const faqText = (value: Category['seo_faq']) => {
@@ -53,6 +55,7 @@ export default function CategoryManager() {
   const [localOrder, setLocalOrder] = useState<string[] | null>(null);
   const [seoDrafts, setSeoDrafts] = useState<Record<string, CategorySeoDraft>>({});
   const [generatingId, setGeneratingId] = useState<string | null>(null);
+  const [generationNotices, setGenerationNotices] = useState<Record<string, { type: 'info' | 'error'; message: string }>>({});
 
   const { categories } = getModeData(activeMode);
   const orderedCategories = useMemo(() => {
@@ -152,6 +155,11 @@ export default function CategoryManager() {
   const generateSeo = async (category: Category) => {
     if (generatingId) return;
     setGeneratingId(category.id);
+    setGenerationNotices((current) => {
+      const next = { ...current };
+      delete next[category.id];
+      return next;
+    });
     try {
       const generated = await apiJson<GeneratedCategorySeo>('/api/deepseek/generate-category-seo', {
         method: 'POST',
@@ -174,8 +182,27 @@ export default function CategoryManager() {
             : generated.seo_faq || '',
         },
       }));
+      if (generated.fallback) {
+        setGenerationNotices((current) => ({
+          ...current,
+          [category.id]: {
+            type: 'info',
+            message: generated.message || 'DeepSeek 응답이 불안정하여 기본 SEO 템플릿을 적용했습니다. 저장 전 내용을 확인해 주세요.',
+          },
+        }));
+      }
     } catch (err) {
-      showError('DeepSeek 카테고리 SEO 생성에 실패했습니다.', err);
+      const message = err instanceof Error && err.message
+        ? err.message
+        : 'DeepSeek 카테고리 SEO 생성에 실패했습니다.';
+      setGenerationNotices((current) => ({
+        ...current,
+        [category.id]: {
+          type: 'error',
+          message: message.includes('API Key') ? message : `DeepSeek 생성 실패: ${message}`,
+        },
+      }));
+      console.error('DeepSeek 카테고리 SEO 생성 실패', err);
     } finally {
       setGeneratingId(null);
     }
@@ -207,6 +234,7 @@ export default function CategoryManager() {
           setActiveMode(mode);
           setLocalOrder(null);
           setSeoDrafts({});
+          setGenerationNotices({});
         }}
       />
 
@@ -234,6 +262,7 @@ export default function CategoryManager() {
       <div className="space-y-3">
         {orderedCategories.map((cat) => {
           const draft = getDraft(cat);
+          const generationNotice = generationNotices[cat.id];
           return (
             <div key={cat.id} className="bg-obsidian-600 border border-obsidian-500 rounded-xl overflow-hidden">
               <div
@@ -329,6 +358,18 @@ export default function CategoryManager() {
                     </button>
                   </div>
                 </div>
+
+                {generationNotice && (
+                  <div
+                    className={`rounded-lg border px-3 py-2 text-xs font-medium ${
+                      generationNotice.type === 'error'
+                        ? 'bg-red-500/10 text-red-300 border-red-500/30'
+                        : 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                    }`}
+                  >
+                    {generationNotice.message}
+                  </div>
+                )}
 
                 <textarea
                   value={draft.seo_description}

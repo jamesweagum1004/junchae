@@ -881,17 +881,167 @@ async function callDeepSeek({ mode, messages }) {
 }
 
 function parseJsonFromText(text) {
+  const cleanText = String(text || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
   try {
-    return JSON.parse(text);
+    return JSON.parse(cleanText);
   } catch {
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) return null;
+    const jsonObject = extractFirstJsonObject(cleanText);
+    if (!jsonObject) return null;
     try {
-      return JSON.parse(match[0]);
+      return JSON.parse(jsonObject);
     } catch {
       return null;
     }
   }
+}
+
+function extractFirstJsonObject(text) {
+  const source = String(text || '');
+  const start = source.indexOf('{');
+  if (start < 0) return '';
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+
+    if (char === '{') depth += 1;
+    if (char === '}') depth -= 1;
+    if (depth === 0) return source.slice(start, index + 1);
+  }
+
+  return '';
+}
+
+function isDeepSeekRefusalText(text) {
+  const normalized = String(text || '').toLowerCase();
+  return [
+    'cannot assist',
+    "can't assist",
+    'unable to assist',
+    'i cannot',
+    'i can’t',
+    'policy',
+    'refuse',
+    'sorry',
+    '죄송',
+    '도와드릴 수',
+    '응답할 수',
+  ].some((pattern) => normalized.includes(pattern));
+}
+
+function normalizeGeneratedCategorySeo(parsed, fallback) {
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  let seoFaq = parsed.seo_faq;
+  if (typeof seoFaq === 'string') {
+    try {
+      seoFaq = JSON.parse(seoFaq);
+    } catch {
+      seoFaq = [];
+    }
+  }
+
+  const faq = Array.isArray(seoFaq)
+    ? seoFaq
+        .map((item) => ({
+          question: normalizeOptionalText(item?.question),
+          answer: normalizeOptionalText(item?.answer),
+        }))
+        .filter((item) => item.question && item.answer)
+        .slice(0, 6)
+    : [];
+
+  const result = {
+    seo_title: normalizeOptionalText(parsed.seo_title),
+    seo_description: normalizeOptionalText(parsed.seo_description),
+    seo_keywords: Array.isArray(parsed.seo_keywords)
+      ? parsed.seo_keywords.map(normalizeOptionalText).filter(Boolean).join(', ')
+      : normalizeOptionalText(parsed.seo_keywords),
+    seo_intro: normalizeOptionalText(parsed.seo_intro),
+    seo_faq: faq,
+  };
+
+  if (!result.seo_title || !result.seo_description || !result.seo_intro || result.seo_faq.length === 0) {
+    return null;
+  }
+
+  return {
+    seo_title: result.seo_title || fallback.seo_title,
+    seo_description: result.seo_description || fallback.seo_description,
+    seo_keywords: result.seo_keywords || fallback.seo_keywords,
+    seo_intro: result.seo_intro || fallback.seo_intro,
+    seo_faq: result.seo_faq.length ? result.seo_faq : fallback.seo_faq,
+  };
+}
+
+function safeSecureCategoryLabel(categoryName) {
+  const name = normalizeOptionalText(categoryName) || '보안';
+  const normalized = name.replace(/\s+/g, '').toLowerCase();
+  if (normalized.includes('스포츠') || normalized.includes('카지노')) return '스포츠·게임 링크 상태 카테고리';
+  if (normalized.includes('토렌트')) return '파일 공유 링크 상태 카테고리';
+  if (normalized.includes('성인')) return '성인 인증 콘텐츠 링크 상태 카테고리';
+  if (normalized.includes('웹툰')) return '웹툰 링크 상태 카테고리';
+  return `${name} 링크 상태 카테고리`;
+}
+
+function fallbackCategorySeo(categoryName) {
+  const name = normalizeOptionalText(categoryName) || '카테고리';
+  return {
+    seo_title: `${name} 링크 상태 확인 - 전체닷컴`,
+    seo_description: `${name} 카테고리의 주소 변경 여부와 접속 상태를 확인할 수 있는 링크 안내 페이지입니다.`,
+    seo_keywords: `${name}, 링크 상태, 주소 확인, 전체닷컴`,
+    seo_intro: `이 페이지는 ${name} 관련 링크의 주소 상태와 분류 정보를 확인할 수 있도록 정리한 카테고리입니다. 각 항목은 관리자 검토와 접속 상태 기준에 따라 관리됩니다.`,
+    seo_faq: [
+      {
+        question: '이 카테고리는 어떤 기준으로 정리되나요?',
+        answer: '카테고리 적합성, 접속 상태, 관리자 검토 기준에 따라 정리됩니다.',
+      },
+      {
+        question: '접속 상태는 어떻게 표시되나요?',
+        answer: '정상, 혼잡, 접속불가, 확인중 상태로 구분해 표시합니다.',
+      },
+      {
+        question: '목록 순서는 어떻게 정해지나요?',
+        answer: '관리자가 중요도와 최신성 기준으로 순서를 조정할 수 있습니다.',
+      },
+    ],
+  };
+}
+
+function sendCategorySeoFallback(res, categoryName, message = 'DeepSeek 생성 실패로 기본 SEO 템플릿을 적용했습니다.') {
+  const fallback = fallbackCategorySeo(categoryName);
+  return res.json({
+    ok: true,
+    fallback: true,
+    message,
+    data: {
+      ...fallback,
+      fallback: true,
+      message,
+    },
+  });
 }
 
 app.get('/api/settings', asyncRoute(async (req, res) => {
@@ -1133,6 +1283,7 @@ robots 기본값은 index,follow 입니다.
 
 app.post('/api/deepseek/generate-category-seo', requireAdminToken, asyncRoute(async (req, res) => {
   const mode = normalizeMode(req.body?.mode);
+  const isSecureMode = mode === 'secure';
   const categoryId = normalizeOptionalText(req.body?.categoryId);
   const categoryName = normalizeOptionalText(req.body?.categoryName);
   const siteNames = Array.isArray(req.body?.siteNames)
@@ -1144,7 +1295,36 @@ app.post('/api/deepseek/generate-category-seo', requireAdminToken, asyncRoute(as
   }
 
   const { promptTemplate } = await getDeepSeekConfig(mode);
-  const prompt = `
+  const fallback = fallbackCategorySeo(categoryName);
+  const safeCategoryLabel = isSecureMode ? safeSecureCategoryLabel(categoryName) : categoryName;
+  const prompt = isSecureMode
+    ? `
+secure mode 카테고리 SEO 생성 전용 프롬프트입니다.
+아래 입력은 민감하거나 오해될 수 있는 이름을 중립 라벨로 바꾼 것입니다.
+특정 사이트 이용, 가입, 참여, 다운로드를 권장하지 마세요.
+우회, 차단 회피, 불법 시청, 무료 다운로드, 무단 공유 같은 표현을 쓰지 마세요.
+"주소 확인", "링크 상태", "카테고리 분류", "접속 상태", "최신 정보 확인" 중심으로 작성하세요.
+홍보 문구가 아니라 중립적인 디렉토리 설명으로 작성하세요.
+반드시 JSON만 반환하세요.
+JSON 이외의 설명문은 금지합니다.
+
+safeCategoryLabel: ${safeCategoryLabel}
+siteCount: ${siteNames.length}
+
+JSON 형식:
+{
+  "seo_title": "...",
+  "seo_description": "...",
+  "seo_keywords": "...",
+  "seo_intro": "...",
+  "seo_faq": [
+    {"question":"...", "answer":"..."},
+    {"question":"...", "answer":"..."},
+    {"question":"...", "answer":"..."}
+  ]
+}
+`
+    : `
 ${promptTemplate}
 
 아래 카테고리 페이지용 SEO 데이터를 한국어 JSON으로 생성하세요.
@@ -1170,34 +1350,37 @@ seo_faq 배열 [{"question":"...", "answer":"..."}]
         { role: 'user', content: prompt },
       ],
     });
-    const parsed = parseJsonFromText(text) || {};
-    const seoFaq = Array.isArray(parsed.seo_faq) ? parsed.seo_faq : [];
+
+    if (!normalizeOptionalText(text) || isDeepSeekRefusalText(text)) {
+      if (isSecureMode) return sendCategorySeoFallback(res, categoryName);
+      return jsonError(res, 502, 'DEEPSEEK_INVALID_RESPONSE', 'DeepSeek returned an empty or refused response.');
+    }
+
+    const parsed = parseJsonFromText(text);
+    const normalized = normalizeGeneratedCategorySeo(parsed, fallback);
+    if (!normalized) {
+      if (isSecureMode) return sendCategorySeoFallback(res, categoryName);
+      return jsonError(res, 502, 'DEEPSEEK_INVALID_JSON', 'DeepSeek response could not be parsed as valid category SEO JSON.');
+    }
+
     return res.json({
       ok: true,
       data: {
-        seo_title: normalizeOptionalText(parsed.seo_title) || `${categoryName} 사이트 모음 - 전체닷컴`,
-        seo_description:
-          normalizeOptionalText(parsed.seo_description) ||
-          `${categoryName} 카테고리의 주요 사이트를 빠르게 확인할 수 있는 링크 모음입니다.`,
-        seo_keywords: Array.isArray(parsed.seo_keywords)
-          ? parsed.seo_keywords.map(normalizeOptionalText).filter(Boolean).join(', ')
-          : normalizeOptionalText(parsed.seo_keywords) || categoryName,
-        seo_intro:
-          normalizeOptionalText(parsed.seo_intro) ||
-          `${categoryName} 카테고리의 주요 사이트를 한 곳에서 확인할 수 있습니다.`,
-        seo_faq: seoFaq
-          .map((item) => ({
-            question: normalizeOptionalText(item?.question),
-            answer: normalizeOptionalText(item?.answer),
-          }))
-          .filter((item) => item.question && item.answer)
-          .slice(0, 6),
+        ...normalized,
+        fallback: false,
         text,
         json: parsed,
       },
     });
   } catch (err) {
     console.error('DeepSeek category SEO generation error:', { code: err.code, status: err.status, message: err.message, body: err.body });
+    if (err.status === 401) {
+      return jsonError(res, 401, 'DEEPSEEK_API_KEY_INVALID', 'DeepSeek API Key가 유효하지 않습니다.');
+    }
+    if (err.code === 'DEEPSEEK_API_KEY_MISSING') {
+      return jsonError(res, 400, 'DEEPSEEK_API_KEY_MISSING', 'DeepSeek API Key가 설정되어 있지 않습니다.');
+    }
+    if (isSecureMode) return sendCategorySeoFallback(res, categoryName);
     return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', err.message);
   }
 }));
