@@ -22,12 +22,16 @@ export function isWriteRequest(init?: RequestInit) {
   return method !== 'GET' && method !== 'HEAD';
 }
 
+function shouldAttachAdminToken(path: string, init?: RequestInit) {
+  return isWriteRequest(init) || path.startsWith('/api/admin/');
+}
+
 export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
     ...init,
     headers: {
       ...(init?.body ? { 'Content-Type': 'application/json' } : {}),
-      ...(isWriteRequest(init) ? adminAuthHeaders() : {}),
+      ...(shouldAttachAdminToken(path, init) ? adminAuthHeaders() : {}),
       ...init?.headers,
     },
   });
@@ -35,7 +39,11 @@ export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok || !body?.ok) {
     console.error('Admin API request failed', { path, status: res.status, body });
-    throw new Error(body?.message || body?.error || `Request failed with ${res.status}`);
+    const error = new Error(body?.message || body?.error || `Request failed with ${res.status}`) as Error & {
+      status?: number;
+    };
+    error.status = res.status;
+    throw error;
   }
 
   return body.data as T;

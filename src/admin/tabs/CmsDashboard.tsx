@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, Bot, CheckCircle2, FileText, Globe2, Monitor, Search, Smartphone, Star, Users } from 'lucide-react';
-import { apiJson } from '../../lib/adminApi';
+import { apiJson, getAdminApiToken } from '../../lib/adminApi';
 
 type CountRow = Record<string, string | number | null> & { count: number };
 
@@ -127,12 +127,28 @@ export default function CmsDashboard() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+
+    if (!getAdminApiToken()) {
+      setError('대시보드를 보려면 보안 / 계정 설정에서 API Token을 저장해 주세요.');
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
     apiJson<DashboardData>('/api/admin/dashboard?days=7')
       .then((payload) => {
         if (!cancelled) setData({ ...emptyDashboard, ...payload });
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : '대시보드 데이터를 불러오지 못했습니다.');
+        if (!cancelled) {
+          const status = typeof err === 'object' && err !== null && 'status' in err ? Number(err.status) : 0;
+          if (status === 401) {
+            setError('API Token이 유효하지 않습니다. 보안 / 계정 설정에서 다시 저장해 주세요.');
+          } else {
+            setError(err instanceof Error ? err.message : '대시보드 데이터를 불러오지 못했습니다.');
+          }
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
