@@ -16,9 +16,13 @@ const logoUploadDir =
   process.env.LOGO_UPLOAD_DIR || '/home/user/web/junchae.com/public_html/uploads/logos';
 const adUploadDir =
   process.env.AD_UPLOAD_DIR || '/home/user/web/junchae.com/public_html/uploads/ads';
+const publicWebRoot =
+  process.env.PUBLIC_WEB_ROOT || '/home/user/web/junchae.com/public_html';
 
 const logoPublicPath = '/uploads/logos';
 const adPublicPath = '/uploads/ads';
+const seoFilesMode = 'normal';
+const seoFilesSection = 'seo_files';
 const adminApiToken = (process.env.ADMIN_API_TOKEN || '').trim();
 const adminAuthMode = 'normal';
 const adminAuthSection = 'admin_auth';
@@ -43,6 +47,27 @@ const allowedAdImageMimeTypes = new Set([
   'image/webp',
   'image/gif',
 ]);
+
+const defaultRobotsTxt = `User-agent: *
+Allow: /
+
+Sitemap: https://junchae.com/sitemap.xml
+`;
+
+const defaultSeoFileSettings = {
+  robots_txt: defaultRobotsTxt,
+  sitemap_base_url: 'https://junchae.com',
+  sitemap_include_normal: 'true',
+  sitemap_include_secure: 'false',
+  sitemap_include_categories: 'true',
+  sitemap_include_sites: 'false',
+  sitemap_custom_urls: '[]',
+  sitemap_last_generated_at: '',
+};
+
+const analyticsRateWindowMs = 60 * 1000;
+const analyticsRateMax = 120;
+const analyticsRateBuckets = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
@@ -637,6 +662,45 @@ async function initializeDatabase() {
     )
   `);
 
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS analytics_events (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      event_type VARCHAR(50) NOT NULL DEFAULT 'pageview',
+      path VARCHAR(500) NOT NULL,
+      mode VARCHAR(50) NULL,
+      category_id VARCHAR(100) NULL,
+      site_id INT NULL,
+      referrer TEXT NULL,
+      referrer_host VARCHAR(255) NULL,
+      device_type VARCHAR(50) NULL,
+      visitor_type VARCHAR(50) NULL,
+      bot_name VARCHAR(100) NULL,
+      country VARCHAR(10) NULL,
+      user_agent_hash VARCHAR(128) NULL,
+      ip_hash VARCHAR(128) NULL,
+      session_id VARCHAR(128) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_created_at (created_at),
+      INDEX idx_path (path),
+      INDEX idx_mode (mode),
+      INDEX idx_referrer_host (referrer_host),
+      INDEX idx_device_type (device_type),
+      INDEX idx_visitor_type (visitor_type),
+      INDEX idx_bot_name (bot_name)
+    )
+  `);
+
+  const existingSeoFiles = await getSettings(seoFilesMode, seoFilesSection, true);
+  const missingSeoFileSettings = {};
+  Object.entries(defaultSeoFileSettings).forEach(([key, value]) => {
+    if (!Object.prototype.hasOwnProperty.call(existingSeoFiles, key)) {
+      missingSeoFileSettings[key] = value;
+    }
+  });
+  if (Object.keys(missingSeoFileSettings).length > 0) {
+    await saveSettings(seoFilesMode, seoFilesSection, missingSeoFileSettings);
+  }
+
   await ensureAdminAuthDefaults();
 
   await db.execute(`
@@ -715,6 +779,265 @@ app.post('/api/admin/auth-settings', requireAdminToken, asyncRoute(async (req, r
   });
 }));
 
+app.get('/robots.txt', asyncRoute(async (req, res) => {
+  const settings = await getSeoFileSettings();
+  const content = await readPublicFile('robots.txt', settings.robots_txt);
+  res.type('text/plain').send(content);
+}));
+
+app.get('/sitemap.xml', asyncRoute(async (req, res) => {
+  const settings = await getSeoFileSettings();
+  const fallback = (await generateSitemapXml(settings)).xml;
+  const content = await readPublicFile('sitemap.xml', fallback);
+  res.type('application/xml').send(content);
+}));
+
+app.get('/api/admin/seo-files', requireAdminToken, asyncRoute(async (req, res) => {
+  const settings = await getSeoFileSettings();
+  const sitemapPreview = await generateSitemapXml(settings);
+  const [robotsExists, sitemapExists] = await Promise.all([
+    publicFileExists('robots.txt'),
+    publicFileExists('sitemap.xml'),
+  ]);
+
+  return res.json({
+    ok: true,
+    data: {
+      settings,
+      robots_preview: settings.robots_txt,
+      sitemap_preview: sitemapPreview.xml,
+      sitemap_url_count: sitemapPreview.urlCount,
+      robots_exists: robotsExists,
+      sitemap_exists: sitemapExists,
+    },
+  });
+}));
+
+app.post('/api/admin/seo-files/robots', requireAdminToken, asyncRoute(async (req, res) => {
+  const config = await getAdminAuthConfig();
+  const robotsTxt = typeof req.body?.robots_txt === 'string' ? req.body.robots_txt : '';
+  const validationError = validateRobotsTxt(robotsTxt, config);
+  if (validationError) return jsonError(res, 400, 'VALIDATION_ERROR', validationError);
+
+  await saveSettings(seoFilesMode, seoFilesSection, { robots_txt: robotsTxt });
+  const fileResult = await writePublicFile('robots.txt', robotsTxt);
+  if (!fileResult.ok) {
+    return jsonError(res, 500, 'SEO_FILE_WRITE_FAILED', `robots.txt setting saved, but file write failed: ${fileResult.message}`);
+  }
+
+  return res.json({
+    ok: true,
+    data: {
+      robots_txt: robotsTxt,
+      file: fileResult,
+      public_url: 'https://junchae.com/robots.txt',
+      preview_url: `/robots.txt?ts=${Date.now()}`,
+      cache_notice: 'Cloudflare 캐시 사용 중이면 robots.txt URL purge가 필요할 수 있습니다.',
+    },
+  });
+}));
+
+app.post('/api/admin/seo-files/sitemap/generate', requireAdminToken, asyncRoute(async (req, res) => {
+  const current = await getSeoFileSettings();
+  const next = normalizeSeoFileSettings({
+    ...current,
+    ...req.body,
+    sitemap_custom_urls: Object.prototype.hasOwnProperty.call(req.body || {}, 'sitemap_custom_urls')
+      ? JSON.stringify(Array.isArray(req.body.sitemap_custom_urls)
+          ? req.body.sitemap_custom_urls
+          : parseJsonArraySetting(req.body.sitemap_custom_urls))
+      : JSON.stringify(current.sitemap_custom_urls),
+  });
+
+  const generatedAt = new Date().toISOString();
+  next.sitemap_last_generated_at = generatedAt;
+  const sitemap = await generateSitemapXml(next);
+  await saveSettings(seoFilesMode, seoFilesSection, settingsPayloadForSave(next));
+  const fileResult = await writePublicFile('sitemap.xml', sitemap.xml);
+  if (!fileResult.ok) {
+    return jsonError(res, 500, 'SEO_FILE_WRITE_FAILED', `sitemap settings saved, but file write failed: ${fileResult.message}`);
+  }
+
+  return res.json({
+    ok: true,
+    data: {
+      settings: next,
+      sitemap_xml: sitemap.xml,
+      sitemap_url_count: sitemap.urlCount,
+      file: fileResult,
+      public_url: 'https://junchae.com/sitemap.xml',
+      preview_url: `/sitemap.xml?ts=${Date.now()}`,
+      cache_notice: 'Cloudflare 캐시 사용 중이면 sitemap.xml URL purge가 필요할 수 있습니다.',
+    },
+  });
+}));
+
+app.post('/api/analytics/pageview', asyncRoute(async (req, res) => {
+  const pathValue = normalizeAnalyticsPath(req.body?.path);
+  if (!pathValue || await isProtectedAnalyticsPath(pathValue)) {
+    return res.json({ ok: true, data: { stored: false } });
+  }
+
+  const clientIp = getClientIp(req);
+  const rateKey = hashAnalyticsValue(clientIp) || 'unknown';
+  if (isAnalyticsRateLimited(rateKey)) {
+    return jsonError(res, 429, 'RATE_LIMITED', 'Too many analytics events.');
+  }
+
+  const referrer = normalizeOptionalText(req.body?.referrer);
+  const userAgent = req.get('user-agent') || '';
+  const botInfo = getBotInfo(userAgent);
+  const siteId = parseId(req.body?.site_id);
+  const mode = normalizeOptionalText(req.body?.mode);
+  const categoryId = normalizeOptionalText(req.body?.category_id);
+
+  await db.execute(
+    `INSERT INTO analytics_events
+     (event_type, path, mode, category_id, site_id, referrer, referrer_host, device_type,
+      visitor_type, bot_name, country, user_agent_hash, ip_hash, session_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      'pageview',
+      pathValue.slice(0, 500),
+      mode === 'secure' ? 'secure' : mode === 'normal' ? 'normal' : null,
+      categoryId ? categoryId.slice(0, 100) : null,
+      siteId,
+      referrer && referrer.length <= 2000 ? referrer : null,
+      getReferrerHost(referrer),
+      getDeviceType(userAgent),
+      botInfo.visitorType,
+      botInfo.botName,
+      normalizeOptionalText(req.get('cf-ipcountry'))?.slice(0, 10) || null,
+      hashAnalyticsValue(userAgent),
+      hashAnalyticsValue(clientIp),
+      normalizeSessionId(req.body?.session_id),
+    ]
+  );
+
+  return res.status(201).json({ ok: true, data: { stored: true } });
+}));
+
+app.get('/api/admin/dashboard', requireAdminToken, asyncRoute(async (req, res) => {
+  const days = Math.max(1, Math.min(90, Number(req.query.days) || 7));
+  const sinceDays = Math.max(days, 30);
+  const settings = await getSeoFileSettings();
+  const [robotsExists, sitemapExists] = await Promise.all([
+    publicFileExists('robots.txt'),
+    publicFileExists('sitemap.xml'),
+  ]);
+
+  const [
+    todayViews,
+    yesterdayViews,
+    last7DaysViews,
+    last30DaysViews,
+    todayUniqueVisitors,
+    aiBotViews,
+    searchBotViews,
+    humanViews,
+    deviceBreakdown,
+    visitorTypeBreakdown,
+    topReferrers,
+    topPages,
+    modeBreakdown,
+    botBreakdown,
+    dailyViews,
+    recentEvents,
+    checklistRows,
+  ] = await Promise.all([
+    queryCount('SELECT COUNT(*) AS count FROM analytics_events WHERE created_at >= CURRENT_DATE()'),
+    queryCount('SELECT COUNT(*) AS count FROM analytics_events WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY) AND created_at < CURRENT_DATE()'),
+    queryCount('SELECT COUNT(*) AS count FROM analytics_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)'),
+    queryCount('SELECT COUNT(*) AS count FROM analytics_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)'),
+    queryCount('SELECT COUNT(DISTINCT COALESCE(session_id, ip_hash)) AS count FROM analytics_events WHERE created_at >= CURRENT_DATE()'),
+    queryCount("SELECT COUNT(*) AS count FROM analytics_events WHERE visitor_type = 'ai_bot' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)"),
+    queryCount("SELECT COUNT(*) AS count FROM analytics_events WHERE visitor_type = 'search_bot' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)"),
+    queryCount("SELECT COUNT(*) AS count FROM analytics_events WHERE visitor_type = 'human' AND created_at >= DATE_SUB(NOW(), INTERVAL 30 DAY)"),
+    queryRows(
+      'SELECT COALESCE(device_type, "unknown") AS device_type, COUNT(*) AS count FROM analytics_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY) GROUP BY device_type ORDER BY count DESC',
+      [days]
+    ),
+    queryRows(
+      'SELECT COALESCE(visitor_type, "human") AS visitor_type, COUNT(*) AS count FROM analytics_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY) GROUP BY visitor_type ORDER BY count DESC',
+      [days]
+    ),
+    queryRows(
+      'SELECT COALESCE(referrer_host, "Direct") AS referrer_host, COUNT(*) AS count FROM analytics_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY) GROUP BY referrer_host ORDER BY count DESC LIMIT 10',
+      [days]
+    ),
+    queryRows(
+      'SELECT path, COUNT(*) AS count FROM analytics_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY) GROUP BY path ORDER BY count DESC LIMIT 10',
+      [days]
+    ),
+    queryRows(
+      'SELECT COALESCE(mode, "unknown") AS mode, COUNT(*) AS count FROM analytics_events WHERE created_at >= DATE_SUB(NOW(), INTERVAL ? DAY) GROUP BY mode ORDER BY count DESC',
+      [days]
+    ),
+    queryRows(
+      'SELECT COALESCE(bot_name, "Human") AS bot_name, COUNT(*) AS count FROM analytics_events WHERE visitor_type <> "human" AND created_at >= DATE_SUB(NOW(), INTERVAL ? DAY) GROUP BY bot_name ORDER BY count DESC LIMIT 12',
+      [days]
+    ),
+    queryRows(
+      'SELECT DATE(created_at) AS date, COUNT(*) AS count FROM analytics_events WHERE created_at >= DATE_SUB(CURRENT_DATE(), INTERVAL ? DAY) GROUP BY DATE(created_at) ORDER BY date ASC',
+      [sinceDays]
+    ),
+    queryRows(
+      `SELECT id, event_type, path, mode, category_id, site_id, referrer_host, device_type,
+              visitor_type, bot_name, country, created_at
+       FROM analytics_events
+       ORDER BY created_at DESC
+       LIMIT 20`
+    ),
+    queryRows(
+      `SELECT
+        COUNT(*) AS total_sites,
+        SUM(CASE WHEN is_hidden = 1 THEN 1 ELSE 0 END) AS hidden_sites,
+        SUM(CASE WHEN is_featured = 1 THEN 1 ELSE 0 END) AS featured_sites,
+        SUM(CASE WHEN status IN ('down', 'offline', 'slow', '접속불가') THEN 1 ELSE 0 END) AS down_sites,
+        SUM(CASE WHEN status IN ('checking', 'unknown', '확인중') THEN 1 ELSE 0 END) AS checking_sites
+       FROM sites`
+    ),
+  ]);
+
+  const categoriesCount = await queryCount('SELECT COUNT(*) AS count FROM categories');
+  const checklist = checklistRows[0] || {};
+
+  return res.json({
+    ok: true,
+    data: {
+      summary: {
+        today_views: todayViews,
+        yesterday_views: yesterdayViews,
+        last_7_days_views: last7DaysViews,
+        last_30_days_views: last30DaysViews,
+        today_unique_visitors: todayUniqueVisitors,
+        ai_bot_views: aiBotViews,
+        search_bot_views: searchBotViews,
+        human_views: humanViews,
+      },
+      device_breakdown: deviceBreakdown,
+      visitor_type_breakdown: visitorTypeBreakdown,
+      top_referrers: topReferrers,
+      top_pages: topPages,
+      mode_breakdown: modeBreakdown,
+      bot_breakdown: botBreakdown,
+      daily_views: dailyViews.map((row) => ({ date: formatDateOnly(row.date), count: Number(row.count) || 0 })),
+      recent_events: recentEvents,
+      checklist: {
+        total_sites: Number(checklist.total_sites) || 0,
+        hidden_sites: Number(checklist.hidden_sites) || 0,
+        featured_sites: Number(checklist.featured_sites) || 0,
+        down_sites: Number(checklist.down_sites) || 0,
+        checking_sites: Number(checklist.checking_sites) || 0,
+        categories_count: categoriesCount,
+        robots_exists: robotsExists,
+        sitemap_exists: sitemapExists,
+        sitemap_last_generated_at: settings.sitemap_last_generated_at || '',
+      },
+    },
+  });
+}));
+
 async function getSettings(mode, section, includeSecrets = false) {
   const [rows] = await db.execute(
     `SELECT setting_key, setting_value, is_secret
@@ -764,6 +1087,325 @@ async function saveSettings(mode, section, settings, secretKeys = []) {
       [mode, section, settingKey, value, isSecret]
     );
   }
+}
+
+function parseBooleanSetting(value, fallback = false) {
+  if (value === true || value === 'true' || value === '1' || value === 1) return true;
+  if (value === false || value === 'false' || value === '0' || value === 0) return false;
+  return fallback;
+}
+
+function parseJsonArraySetting(value) {
+  if (Array.isArray(value)) return value;
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(String(value));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function normalizeBaseUrl(value) {
+  const fallback = defaultSeoFileSettings.sitemap_base_url;
+  const text = normalizeOptionalText(value) || fallback;
+  try {
+    const url = new URL(text);
+    if (!['http:', 'https:'].includes(url.protocol)) return fallback;
+    return url.origin;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeSeoFileSettings(settings = {}) {
+  const merged = { ...defaultSeoFileSettings, ...settings };
+  return {
+    robots_txt: normalizeOptionalText(merged.robots_txt) || defaultRobotsTxt,
+    sitemap_base_url: normalizeBaseUrl(merged.sitemap_base_url),
+    sitemap_include_normal: parseBooleanSetting(merged.sitemap_include_normal, true),
+    sitemap_include_secure: parseBooleanSetting(merged.sitemap_include_secure, false),
+    sitemap_include_categories: parseBooleanSetting(merged.sitemap_include_categories, true),
+    sitemap_include_sites: parseBooleanSetting(merged.sitemap_include_sites, false),
+    sitemap_custom_urls: parseJsonArraySetting(merged.sitemap_custom_urls)
+      .map((url) => normalizeOptionalText(url))
+      .filter(Boolean)
+      .slice(0, 200),
+    sitemap_last_generated_at: normalizeOptionalText(merged.sitemap_last_generated_at) || '',
+  };
+}
+
+async function getSeoFileSettings() {
+  const settings = await getSettings(seoFilesMode, seoFilesSection, true);
+  return normalizeSeoFileSettings(settings);
+}
+
+function settingsPayloadForSave(settings) {
+  return {
+    robots_txt: settings.robots_txt,
+    sitemap_base_url: settings.sitemap_base_url,
+    sitemap_include_normal: String(Boolean(settings.sitemap_include_normal)),
+    sitemap_include_secure: String(Boolean(settings.sitemap_include_secure)),
+    sitemap_include_categories: String(Boolean(settings.sitemap_include_categories)),
+    sitemap_include_sites: String(Boolean(settings.sitemap_include_sites)),
+    sitemap_custom_urls: JSON.stringify(settings.sitemap_custom_urls || []),
+    sitemap_last_generated_at: settings.sitemap_last_generated_at || '',
+  };
+}
+
+function seoFilePath(fileName) {
+  return path.join(publicWebRoot, fileName);
+}
+
+async function writePublicFile(fileName, content) {
+  const target = seoFilePath(fileName);
+  try {
+    ensureDir(publicWebRoot);
+    await fs.promises.writeFile(target, content, 'utf8');
+    return { ok: true, path: target };
+  } catch (err) {
+    return {
+      ok: false,
+      path: target,
+      message: err?.message || `Failed to write ${fileName}.`,
+    };
+  }
+}
+
+async function readPublicFile(fileName, fallback = '') {
+  try {
+    return await fs.promises.readFile(seoFilePath(fileName), 'utf8');
+  } catch {
+    return fallback;
+  }
+}
+
+async function publicFileExists(fileName) {
+  try {
+    await fs.promises.access(seoFilePath(fileName), fs.constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function xmlEscape(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
+function formatDateOnly(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return new Date().toISOString().slice(0, 10);
+  return date.toISOString().slice(0, 10);
+}
+
+function absoluteUrl(baseUrl, pathname) {
+  const base = normalizeBaseUrl(baseUrl);
+  const pathName = pathname.startsWith('/') ? pathname : `/${pathname}`;
+  return `${base}${pathName}`;
+}
+
+function sitemapUrlEntry(loc, lastmod, changefreq, priority) {
+  return [
+    '  <url>',
+    `    <loc>${xmlEscape(loc)}</loc>`,
+    `    <lastmod>${xmlEscape(lastmod)}</lastmod>`,
+    `    <changefreq>${xmlEscape(changefreq)}</changefreq>`,
+    `    <priority>${xmlEscape(priority)}</priority>`,
+    '  </url>',
+  ].join('\n');
+}
+
+function normalizeCustomSitemapUrl(value, baseUrl) {
+  const text = normalizeOptionalText(value);
+  if (!text) return null;
+  const base = normalizeBaseUrl(baseUrl);
+  try {
+    const url = text.startsWith('/') ? new URL(text, base) : new URL(text);
+    if (url.origin !== base) return null;
+    if (url.pathname.toLowerCase().startsWith('/api')) return null;
+    return `${url.origin}${url.pathname}${url.search}`;
+  } catch {
+    return null;
+  }
+}
+
+async function generateSitemapXml(settings) {
+  const normalized = normalizeSeoFileSettings(settings);
+  const entries = new Map();
+  const today = formatDateOnly();
+
+  entries.set(absoluteUrl(normalized.sitemap_base_url, '/'), sitemapUrlEntry(
+    absoluteUrl(normalized.sitemap_base_url, '/'),
+    today,
+    'daily',
+    '1.0'
+  ));
+
+  if (normalized.sitemap_include_categories) {
+    const modes = [];
+    if (normalized.sitemap_include_normal) modes.push('normal');
+    if (normalized.sitemap_include_secure) modes.push('secure');
+
+    if (modes.length > 0) {
+      const placeholders = modes.map(() => '?').join(', ');
+      const [categories] = await db.execute(
+        `SELECT id, name, mode, updated_at FROM categories WHERE mode IN (${placeholders}) ORDER BY mode ASC, sort_order ASC, id ASC`,
+        modes
+      );
+
+      categories.forEach((category) => {
+        const slug = encodeURIComponent(String(category.id || category.name));
+        const loc = absoluteUrl(normalized.sitemap_base_url, `/category/${slug}`);
+        entries.set(loc, sitemapUrlEntry(loc, formatDateOnly(category.updated_at), 'daily', '0.8'));
+      });
+    }
+  }
+
+  normalized.sitemap_custom_urls.forEach((customUrl) => {
+    const loc = normalizeCustomSitemapUrl(customUrl, normalized.sitemap_base_url);
+    if (loc) entries.set(loc, sitemapUrlEntry(loc, today, 'weekly', '0.7'));
+  });
+
+  const xml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ...entries.values(),
+    '</urlset>',
+    '',
+  ].join('\n');
+
+  return {
+    xml,
+    urlCount: entries.size,
+    settings: normalized,
+  };
+}
+
+function getForbiddenRobotsTokens(config) {
+  return [
+    config.adminPath,
+    'junchae1004',
+    defaultAdminUsername,
+  ]
+    .map((value) => normalizeOptionalText(value))
+    .filter(Boolean);
+}
+
+function validateRobotsTxt(robotsTxt, config) {
+  const text = String(robotsTxt || '');
+  if (!text.trim()) return 'robots_txt is required.';
+  if (text.length > 20000) return 'robots_txt is too large.';
+  const lower = text.toLowerCase();
+  const forbidden = getForbiddenRobotsTokens(config).find((token) =>
+    token && lower.includes(token.toLowerCase())
+  );
+  if (forbidden) return 'robots.txt must not contain the admin path or admin identifiers.';
+  return '';
+}
+
+function normalizeSessionId(value) {
+  const text = normalizeOptionalText(value);
+  if (!text) return null;
+  return text.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 128) || null;
+}
+
+function hashAnalyticsValue(value) {
+  const text = normalizeOptionalText(value);
+  if (!text) return null;
+  return crypto.createHash('sha256').update(text).digest('hex');
+}
+
+function getClientIp(req) {
+  const cfIp = normalizeOptionalText(req.get('cf-connecting-ip'));
+  if (cfIp) return cfIp;
+  const forwarded = normalizeOptionalText(req.get('x-forwarded-for'));
+  if (forwarded) return forwarded.split(',')[0].trim();
+  return req.ip || req.socket?.remoteAddress || '';
+}
+
+function normalizeAnalyticsPath(value) {
+  const pathValue = normalizeOptionalText(value);
+  if (!pathValue || pathValue.length > 500) return '';
+  try {
+    const parsed = pathValue.startsWith('http') ? new URL(pathValue) : null;
+    return parsed ? parsed.pathname : pathValue.split('?')[0];
+  } catch {
+    return pathValue.split('?')[0];
+  }
+}
+
+function getReferrerHost(value) {
+  const referrer = normalizeOptionalText(value);
+  if (!referrer || referrer.length > 2000) return null;
+  try {
+    return new URL(referrer).hostname.replace(/^www\./, '').slice(0, 255);
+  } catch {
+    return null;
+  }
+}
+
+function getDeviceType(userAgent) {
+  const ua = String(userAgent || '').toLowerCase();
+  if (!ua) return 'unknown';
+  if (/ipad|tablet|kindle|silk/.test(ua)) return 'tablet';
+  if (/mobile|iphone|android|phone/.test(ua)) return 'mobile';
+  return 'desktop';
+}
+
+function getBotInfo(userAgent) {
+  const ua = String(userAgent || '');
+  const patterns = [
+    { name: 'ChatGPT-User', type: 'ai_bot', regex: /chatgpt-user/i },
+    { name: 'GPTBot', type: 'ai_bot', regex: /gptbot/i },
+    { name: 'ClaudeBot', type: 'ai_bot', regex: /claudebot|claude-web/i },
+    { name: 'PerplexityBot', type: 'ai_bot', regex: /perplexitybot/i },
+    { name: 'DuckAssistBot', type: 'ai_bot', regex: /duckassistbot/i },
+    { name: 'Googlebot', type: 'search_bot', regex: /googlebot/i },
+    { name: 'BingBot', type: 'search_bot', regex: /bingbot/i },
+    { name: 'Applebot', type: 'search_bot', regex: /applebot/i },
+    { name: 'Bytespider', type: 'other_bot', regex: /bytespider/i },
+    { name: 'CCBot', type: 'other_bot', regex: /ccbot/i },
+  ];
+  const match = patterns.find((item) => item.regex.test(ua));
+  if (match) return { visitorType: match.type, botName: match.name };
+  if (/bot|crawler|spider/i.test(ua)) return { visitorType: 'other_bot', botName: 'OtherBot' };
+  return { visitorType: 'human', botName: null };
+}
+
+function isAnalyticsRateLimited(key) {
+  const now = Date.now();
+  const bucket = analyticsRateBuckets.get(key) || { count: 0, startedAt: now };
+  if (now - bucket.startedAt > analyticsRateWindowMs) {
+    analyticsRateBuckets.set(key, { count: 1, startedAt: now });
+    return false;
+  }
+  bucket.count += 1;
+  analyticsRateBuckets.set(key, bucket);
+  return bucket.count > analyticsRateMax;
+}
+
+async function isProtectedAnalyticsPath(pathValue) {
+  const cleanPath = normalizeAnalyticsPath(pathValue);
+  if (!cleanPath || cleanPath.toLowerCase().startsWith('/api')) return true;
+  const config = await getAdminAuthConfig();
+  const adminPath = `/${config.adminPath}`;
+  return cleanPath === adminPath || cleanPath.startsWith(`${adminPath}/`);
+}
+
+async function queryCount(sql, params = []) {
+  const [rows] = await db.execute(sql, params);
+  return Number(rows[0]?.count) || 0;
+}
+
+async function queryRows(sql, params = []) {
+  const [rows] = await db.execute(sql, params);
+  return rows;
 }
 
 async function ensureAdminAuthDefaults() {

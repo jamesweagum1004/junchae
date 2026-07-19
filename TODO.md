@@ -23,15 +23,25 @@
 - [x] Add manual TOP10 order management.
 - [x] Add category-level site ordering.
 - [x] Add mobile two-column compact site UI.
+- [x] Add admin `robots.txt` management.
+- [x] Add admin `sitemap.xml` generation and management.
+- [x] Add CMS dashboard.
+- [x] Add visitor analytics collection.
+- [x] Add AI/search bot classification.
+- [x] Add category header click navigation.
 - [ ] Automate rankings from real click counts.
+- [ ] Add click-count based TOP10 automation.
 - [ ] Add n8n link status auto-checking.
+- [ ] Add n8n link candidate auto-collection.
 - [ ] Add automatic `last_checked_at` and `status` updates.
 - [ ] Improve admin sorting with drag and drop.
 - [ ] Harden admin authentication and persist admin account settings on the server.
 - [ ] Encrypt stored secret settings at rest.
 - [ ] Add SSR or static SEO page generation for stronger per-page indexing.
-- [ ] Add automatic `sitemap.xml` generation.
-- [ ] Add `robots.txt` management.
+- [ ] Add sitemap auto-regeneration scheduler.
+- [ ] Add site detail SEO pages.
+- [ ] Add Cloudflare Analytics API integration.
+- [ ] Add Google Search Console API integration.
 - [ ] Add deployment automation.
 - [ ] Add backup automation.
 - [ ] Define and document ad script security policy.

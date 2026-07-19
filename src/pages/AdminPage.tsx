@@ -16,6 +16,7 @@ import {
   Shield,
   KeyRound,
   Search,
+  LayoutDashboard,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAdminAuth } from '../context/AdminAuthContext';
@@ -30,14 +31,18 @@ import PSEOManager from '../admin/tabs/PSEOManager';
 import AISEOManager from '../admin/tabs/AISEOManager';
 import BridgeAdManager from '../admin/tabs/BridgeAdManager';
 import AccountSettings from '../admin/tabs/AccountSettings';
+import CmsDashboard from '../admin/tabs/CmsDashboard';
+import SeoFilesManager from '../admin/tabs/SeoFilesManager';
 
 const TABS = [
+  { id: 'dashboard', label: '대시보드', icon: LayoutDashboard, desc: '방문자/CMS 현황' },
   { id: 'categories', label: '카테고리 관리', icon: FolderOpen, desc: '추가/삭제/순서' },
   { id: 'sites', label: '사이트 리스트', icon: List, desc: '상태/로고/카테고리' },
   { id: 'logos', label: '로고/파비콘', icon: Image, desc: '이미지 업로드' },
   { id: 'deepseek', label: 'DeepSeek AI', icon: Cpu, desc: 'API 설정' },
   { id: 'ads', label: '광고 컨트롤러', icon: Megaphone, desc: '배너 관리' },
   { id: 'analytics', label: 'Google SiteKit', icon: BarChart2, desc: 'GA/Search Console' },
+  { id: 'seo-files', label: 'SEO 파일 관리', icon: FileText, desc: 'robots/sitemap' },
   { id: 'pseo', label: 'pSEO 관리', icon: FileText, desc: '사이트별 메타' },
   { id: 'ai-seo', label: 'AI SEO 센터', icon: Search, desc: 'AI SEO 생성' },
   { id: 'bridge', label: '브릿지 광고', icon: Radio, desc: 'ExoClick 설정' },
@@ -47,7 +52,7 @@ const TABS = [
 export default function AdminPage() {
   const navigate = useNavigate();
   const { isAuthenticated, logout } = useAdminAuth();
-  const [activeTab, setActiveTab] = useState('categories');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   if (!isAuthenticated) {
@@ -58,12 +63,14 @@ export default function AdminPage() {
 
   const renderContent = () => {
     switch (activeTab) {
+      case 'dashboard': return <CmsDashboard />;
       case 'categories': return <CategoryManager />;
       case 'sites': return <SiteManager />;
       case 'logos': return <LogoUploader />;
       case 'deepseek': return <DeepSeekSettings />;
       case 'ads': return <AdController />;
       case 'analytics': return <AnalyticsSettings />;
+      case 'seo-files': return <SeoFilesManager />;
       case 'pseo': return <PSEOManager />;
       case 'ai-seo': return <AISEOManager />;
       case 'bridge': return <BridgeAdManager />;

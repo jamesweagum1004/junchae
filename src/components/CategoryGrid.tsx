@@ -62,7 +62,10 @@ function SiteRow({ site, isSecure, onClick }: SiteRowProps) {
 
   return (
     <button
-      onClick={() => onClick(site.url, site.name)}
+      onClick={(e) => {
+        e.stopPropagation();
+        onClick(site.url, site.name);
+      }}
       className={`group w-full min-h-[58px] md:min-h-0 flex items-center gap-2 px-2 py-2 md:gap-2.5 md:px-3 md:py-2.5 rounded-lg md:rounded-xl text-left transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] ${
         isSecure
           ? 'hover:bg-white/[0.04] text-slate-400 hover:text-white'
@@ -171,6 +174,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
   const navigate = useNavigate();
   const { isSecure } = useTheme();
   const { categories, interAds } = useData();
+  const openCategory = (categoryId: string) => navigate(`/category/${encodeURIComponent(categoryId)}`);
 
   const adsAfterIndex = new Map<number, InterAd[]>();
   interAds
@@ -192,13 +196,22 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
         return (
           <Fragment key={category.id}>
             <div
+              role="button"
+              tabIndex={0}
+              aria-label={`${category.name} 전체 보기`}
+              onClick={() => openCategory(category.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') openCategory(category.id);
+              }}
               className={`rounded-2xl border p-2.5 sm:p-3 transition-all duration-200 flex flex-col ${
                 isSecure
                   ? `glass-dark ${colors.dark}`
                   : `glass-light ${colors.light}`
               }`}
             >
-              <div className={`flex items-center gap-2 mb-2 pb-2 border-b ${isSecure ? 'border-white/[0.06]' : 'border-slate-200/60'}`}>
+              <div className={`flex items-center gap-2 mb-2 pb-2 border-b cursor-pointer rounded-lg transition-colors ${
+                isSecure ? 'border-white/[0.06] hover:bg-white/[0.03]' : 'border-slate-200/60 hover:bg-slate-100/50'
+              }`}>
                 <IconComponent size={13} className={colors.icon} />
                 <h3 className={`text-xs font-bold flex-1 tracking-tight ${isSecure ? 'text-slate-200' : 'text-slate-700'}`}>
                   {category.name}
@@ -206,6 +219,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                 <span className={`text-[9px] font-mono ${isSecure ? 'text-slate-600' : 'text-slate-400'}`}>
                   {category.sites.length}
                 </span>
+                <ChevronRight size={13} className={isSecure ? 'text-slate-600' : 'text-slate-400'} />
               </div>
 
               <div className="grid grid-cols-2 gap-2 md:flex md:flex-col md:gap-0.5">
@@ -216,7 +230,10 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
 
               {hiddenCount > 0 && (
                 <button
-                  onClick={() => navigate(`/category/${encodeURIComponent(category.id)}`)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openCategory(category.id);
+                  }}
                   className={`mt-2 w-full flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition-all duration-200 ${
                     isSecure
                       ? 'bg-white/[0.04] text-neon-orange hover:bg-neon-orange/10 hover:text-orange-300 border border-white/[0.06] hover:border-neon-orange/30'

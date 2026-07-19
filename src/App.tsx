@@ -7,6 +7,7 @@ import AdminPage from './pages/AdminPage';
 import CategoryPage from './pages/CategoryPage';
 import NotFoundPage from './pages/NotFoundPage';
 import SeoHeadManager from './components/SeoHeadManager';
+import AnalyticsTracker from './components/AnalyticsTracker';
 
 function DynamicRouter() {
   const location = useLocation();
@@ -27,6 +28,7 @@ export default function App() {
         <AdminAuthProvider>
           <BrowserRouter>
             <SeoHeadManager />
+            <AnalyticsTracker />
             <Routes>
               <Route path="/*" element={<DynamicRouter />} />
             </Routes>
