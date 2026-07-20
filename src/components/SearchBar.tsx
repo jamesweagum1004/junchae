@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { useData } from '../context/DataContext';
+import type { Site } from '../data/categories';
 import { getSiteStatusMeta } from '../lib/siteStatus';
 
 interface SearchBarProps {
-  onSiteClick: (url: string, name: string) => void;
+  onSiteClick: (site: Site) => void;
 }
 
 export default function SearchBar({ onSiteClick }: SearchBarProps) {
@@ -65,7 +66,7 @@ export default function SearchBar({ onSiteClick }: SearchBarProps) {
               <button
                 key={site.id}
                 onClick={() => {
-                  onSiteClick(site.url, site.name);
+                  onSiteClick(site);
                   setQuery('');
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors ${

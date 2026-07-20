@@ -32,12 +32,13 @@ const defaultAdminPassword = 'change-me-now';
 const scryptAsync = promisify(crypto.scrypt);
 const maxLogoSize = 2 * 1024 * 1024;
 const maxAdImageSize = 5 * 1024 * 1024;
-const allowedLogoExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.ico']);
+const allowedLogoExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.ico']);
 const allowedAdImageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
 const allowedLogoMimeTypes = new Set([
   'image/jpeg',
   'image/png',
   'image/webp',
+  'image/gif',
   'image/x-icon',
   'image/vnd.microsoft.icon',
 ]);
@@ -211,6 +212,15 @@ const editableAdColumns = [
 
 function ensureDir(uploadDir) {
   fs.mkdirSync(uploadDir, { recursive: true });
+}
+
+function safeUploadPath(uploadDir, fileName) {
+  const root = path.resolve(uploadDir);
+  const target = path.resolve(root, fileName);
+  if (!target.startsWith(`${root}${path.sep}`)) {
+    throw new Error('INVALID_UPLOAD_PATH');
+  }
+  return target;
 }
 
 function safeFileName(prefix, originalName, allowedExtensions, fallbackExt) {
@@ -399,6 +409,84 @@ function slugify(value) {
     .slice(0, 255) || 'site';
 }
 
+function normalizeSiteSlug(value) {
+  const text = normalizeOptionalText(value);
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[/&]+/g, '-')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 255);
+}
+
+function baseSiteSlug(name, id) {
+  return normalizeSiteSlug(name) || `site-${id || 'new'}`;
+}
+
+function uniqueSiteSlug(name, id, takenSlugs) {
+  const base = baseSiteSlug(name, id);
+  let candidate = base;
+  let suffix = 2;
+  while (takenSlugs.has(candidate.toLowerCase())) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  takenSlugs.add(candidate.toLowerCase());
+  return candidate;
+}
+
+async function isSiteSlugTaken(slug, excludeId = null) {
+  if (!slug) return false;
+  const values = [slug];
+  let where = 'LOWER(seo_slug) = LOWER(?)';
+  if (excludeId) {
+    where += ' AND id <> ?';
+    values.push(excludeId);
+  }
+  const [rows] = await db.execute(`SELECT COUNT(*) AS count FROM sites WHERE ${where}`, values);
+  return Number(rows[0]?.count) > 0;
+}
+
+async function getTakenSiteSlugs(excludeId = null) {
+  const values = [];
+  let where = 'seo_slug IS NOT NULL AND seo_slug <> ""';
+  if (excludeId) {
+    where += ' AND id <> ?';
+    values.push(excludeId);
+  }
+  const [rows] = await db.execute(`SELECT seo_slug FROM sites WHERE ${where}`, values);
+  return new Set(
+    rows
+      .map((row) => normalizeSiteSlug(row.seo_slug))
+      .filter(Boolean)
+      .map((slug) => slug.toLowerCase())
+  );
+}
+
+async function ensureSiteSlugs() {
+  const [rows] = await db.execute('SELECT id, name, seo_slug FROM sites ORDER BY id ASC');
+  const taken = new Set();
+
+  for (const row of rows) {
+    const currentSlug = normalizeSiteSlug(row.seo_slug);
+    const currentKey = currentSlug.toLowerCase();
+    const slug = currentSlug && !taken.has(currentKey)
+      ? currentSlug
+      : uniqueSiteSlug(row.name, row.id, taken);
+
+    if (currentSlug && !taken.has(currentKey)) {
+      taken.add(currentKey);
+    }
+
+    if (slug !== row.seo_slug) {
+      await db.execute('UPDATE sites SET seo_slug = ? WHERE id = ?', [slug, row.id]);
+    }
+  }
+}
+
 const categorySlugMap = new Map([
   ['포털', 'portal'],
   ['커뮤니티', 'community'],
@@ -519,6 +607,7 @@ function normalizeSiteInput(body) {
     description: normalizeOptionalText(body.description),
     logo: normalizeOptionalText(body.logo),
     status: normalizeSiteStatus(body.status || 'normal'),
+    seo_slug: normalizeSiteSlug(body.seo_slug),
     is_hidden: normalizeBooleanInt(body.is_hidden ?? body.isHidden, 0),
     is_featured: normalizeBooleanInt(body.is_featured ?? body.isFeatured, 0),
     featured_order: normalizeSortOrder(body.featured_order ?? body.featuredOrder),
@@ -560,6 +649,8 @@ function pickEditableSiteUpdates(body) {
       updates[column] = normalizeMode(body[column]);
     } else if (column === 'status') {
       updates[column] = normalizeSiteStatus(body[column]);
+    } else if (column === 'seo_slug') {
+      updates[column] = normalizeSiteSlug(body[column]);
     } else if (column === 'name' || column === 'url') {
       updates[column] = normalizeRequiredText(body[column]);
     } else {
@@ -821,6 +912,7 @@ async function initializeDatabase() {
     WHERE category IS NOT NULL AND category <> ''
   `);
 
+  await ensureSiteSlugs();
   await ensureCategorySlugs();
 }
 
@@ -1380,6 +1472,28 @@ async function generateSitemapXml(settings) {
     }
   }
 
+  if (normalized.sitemap_include_sites) {
+    const modes = [];
+    if (normalized.sitemap_include_normal) modes.push('normal');
+    if (normalized.sitemap_include_secure) modes.push('secure');
+
+    if (modes.length > 0) {
+      const placeholders = modes.map(() => '?').join(', ');
+      const [sites] = await db.execute(
+        `SELECT id, name, seo_slug, mode, updated_at FROM sites
+         WHERE mode IN (${placeholders}) AND COALESCE(is_hidden, 0) = 0
+         ORDER BY mode ASC, sort_order ASC, name ASC, id ASC`,
+        modes
+      );
+
+      sites.forEach((site) => {
+        const slug = encodeURIComponent(normalizeSiteSlug(site.seo_slug) || baseSiteSlug(site.name, site.id));
+        const loc = absoluteUrl(normalized.sitemap_base_url, `/site/${slug}`);
+        entries.set(loc, sitemapUrlEntry(loc, formatDateOnly(site.updated_at), 'weekly', '0.6'));
+      });
+    }
+  }
+
   normalized.sitemap_custom_urls.forEach((customUrl) => {
     const loc = normalizeCustomSitemapUrl(customUrl, normalized.sitemap_base_url);
     if (loc) entries.set(loc, sitemapUrlEntry(loc, today, 'weekly', '0.7'));
@@ -1570,14 +1684,15 @@ async function getAdminAuthConfig() {
 }
 
 function formatSeo(site) {
+  const siteSlug = normalizeSiteSlug(site.seo_slug) || baseSiteSlug(site.name, site.id);
   return {
     id: site.id,
     seo_title: site.seo_title || `${site.name} 최신 정보`,
     seo_description: site.seo_description || site.description || `${site.name} 사이트 정보와 접속 링크를 확인하세요.`,
     seo_keywords: site.seo_keywords || site.name,
-    seo_slug: site.seo_slug || slugify(site.name),
+    seo_slug: siteSlug,
     seo_h1: site.seo_h1 || site.name,
-    seo_canonical: site.seo_canonical || site.url,
+    seo_canonical: `https://junchae.com/site/${siteSlug}`,
     seo_og_title: site.seo_og_title || site.seo_title || `${site.name} 최신 정보`,
     seo_og_description: site.seo_og_description || site.seo_description || site.description || '',
     seo_og_image: site.seo_og_image || site.logo || '',
@@ -1836,6 +1951,7 @@ app.post('/api/settings', requireAdminToken, asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/sites', asyncRoute(async (req, res) => {
+  await ensureSiteSlugs();
   const values = [];
   let where = '';
   if (req.query.mode) {
@@ -1864,12 +1980,19 @@ app.patch('/api/sites/:id/seo', requireAdminToken, asyncRoute(async (req, res) =
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
+  const existing = await getSiteById(id);
+  if (!existing) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+
   const updates = {};
   seoColumns.forEach((column) => {
     if (!Object.prototype.hasOwnProperty.call(req.body || {}, column)) return;
-    updates[column] = column === 'seo_score'
-      ? normalizeSeoScore(req.body[column])
-      : normalizeOptionalText(req.body[column]);
+    if (column === 'seo_score') {
+      updates[column] = normalizeSeoScore(req.body[column]);
+    } else if (column === 'seo_slug') {
+      updates[column] = normalizeSiteSlug(req.body[column]);
+    } else {
+      updates[column] = normalizeOptionalText(req.body[column]);
+    }
   });
   siteControlColumns.forEach((column) => {
     const aliases = {
@@ -1887,6 +2010,19 @@ app.patch('/api/sites/:id/seo', requireAdminToken, asyncRoute(async (req, res) =
     }
   });
   updates.seo_updated_at = new Date();
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'seo_slug')) {
+    if (!updates.seo_slug) {
+      const taken = await getTakenSiteSlugs(id);
+      updates.seo_slug = uniqueSiteSlug(existing.name, id, taken);
+    }
+    if (await isSiteSlugTaken(updates.seo_slug, id)) {
+      return jsonError(res, 400, 'DUPLICATE_SITE_SLUG', 'Site SEO slug already exists.');
+    }
+  } else if (!normalizeSiteSlug(existing.seo_slug)) {
+    const taken = await getTakenSiteSlugs(id);
+    updates.seo_slug = uniqueSiteSlug(existing.name, id, taken);
+  }
 
   const entries = Object.entries(updates);
   const setClause = entries.map(([column]) => `${column} = ?`).join(', ');
@@ -2543,12 +2679,14 @@ app.post('/api/uploads/logo/from-url', requireAdminToken, asyncRoute(async (req,
         ? '.jpg'
         : contentType === 'image/webp'
           ? '.webp'
+          : contentType === 'image/gif'
+            ? '.gif'
           : contentType.includes('icon')
             ? '.ico'
             : '.png';
   const fileName = safeFileName('logo', `remote${ext}`, allowedLogoExtensions, '.png');
   ensureDir(logoUploadDir);
-  await fs.promises.writeFile(path.join(logoUploadDir, fileName), buffer);
+  await fs.promises.writeFile(safeUploadPath(logoUploadDir, fileName), buffer);
 
   return res.status(201).json({
     ok: true,
@@ -2563,10 +2701,15 @@ app.post('/api/sites', requireAdminToken, asyncRoute(async (req, res) => {
     return jsonError(res, 400, 'VALIDATION_ERROR', 'name and url are required.');
   }
 
+  if (site.seo_slug && await isSiteSlugTaken(site.seo_slug)) {
+    return jsonError(res, 400, 'DUPLICATE_SITE_SLUG', 'Site SEO slug already exists.');
+  }
+  const shouldGenerateSiteSlug = !site.seo_slug;
+
   const [result] = await db.execute(
     `INSERT INTO sites
-     (mode, name, url, category, description, logo, status, is_hidden, is_featured, featured_order, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (mode, name, url, category, description, logo, status, seo_slug, is_hidden, is_featured, featured_order, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       site.mode,
       site.name,
@@ -2575,12 +2718,19 @@ app.post('/api/sites', requireAdminToken, asyncRoute(async (req, res) => {
       site.description,
       site.logo,
       site.status,
+      site.seo_slug,
       site.is_hidden,
       site.is_featured,
       site.featured_order,
       site.sort_order,
     ]
   );
+
+  if (shouldGenerateSiteSlug) {
+    const taken = await getTakenSiteSlugs(result.insertId);
+    const generatedSlug = uniqueSiteSlug(site.name, result.insertId, taken);
+    await db.execute('UPDATE sites SET seo_slug = ? WHERE id = ?', [generatedSlug, result.insertId]);
+  }
 
   const created = await getSiteById(result.insertId);
   return res.status(201).json({ ok: true, data: created });
@@ -2597,6 +2747,24 @@ async function saveSiteUpdates(req, res) {
   }
   if (Object.prototype.hasOwnProperty.call(updates, 'url') && !updates.url) {
     return jsonError(res, 400, 'VALIDATION_ERROR', 'url cannot be empty.');
+  }
+
+  const existing = await getSiteById(id);
+  if (!existing) {
+    return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'seo_slug')) {
+    if (!updates.seo_slug) {
+      const taken = await getTakenSiteSlugs(id);
+      updates.seo_slug = uniqueSiteSlug(updates.name || existing.name, id, taken);
+    }
+    if (await isSiteSlugTaken(updates.seo_slug, id)) {
+      return jsonError(res, 400, 'DUPLICATE_SITE_SLUG', 'Site SEO slug already exists.');
+    }
+  } else if (!normalizeSiteSlug(existing.seo_slug)) {
+    const taken = await getTakenSiteSlugs(id);
+    updates.seo_slug = uniqueSiteSlug(updates.name || existing.name, id, taken);
   }
 
   const entries = Object.entries(updates);

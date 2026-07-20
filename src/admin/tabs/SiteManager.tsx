@@ -21,6 +21,7 @@ import { Site, SiteStatus } from '../../data/categories';
 import ModeSubTabs from '../ModeSubTabs';
 import { adminAuthHeaders } from '../../lib/adminApi';
 import { getSiteStatusMeta, normalizeSiteStatus } from '../../lib/siteStatus';
+import { sitePath, slugifySiteName } from '../../lib/siteSlug';
 
 const statusOptions: { value: SiteStatus; label: string }[] = [
   { value: 'normal', label: '정상' },
@@ -90,6 +91,8 @@ export default function SiteManager() {
   const [editingUrlValue, setEditingUrlValue] = useState('');
   const [editingNameId, setEditingNameId] = useState<number | null>(null);
   const [editingNameValue, setEditingNameValue] = useState('');
+  const [slugDrafts, setSlugDrafts] = useState<Record<number, string>>({});
+  const [slugNotices, setSlugNotices] = useState<Record<number, { type: 'info' | 'error'; message: string }>>({});
   const modalFileInputRef = useRef<HTMLInputElement>(null);
   const newSiteFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -251,6 +254,50 @@ export default function SiteManager() {
     }
   };
 
+  const getSlugDraft = (site: Site) => slugDrafts[site.id] ?? site.seo_slug ?? '';
+
+  const updateSlugDraft = (site: Site, value: string) => {
+    setSlugDrafts((current) => ({ ...current, [site.id]: value }));
+    setSlugNotices((current) => {
+      const next = { ...current };
+      delete next[site.id];
+      return next;
+    });
+  };
+
+  const fillAutoSlug = (site: Site) => {
+    updateSlugDraft(site, slugifySiteName(site.name, site.id));
+  };
+
+  const saveSlug = async (site: Site) => {
+    try {
+      await updateSiteInMode(activeMode, site.id, { seo_slug: getSlugDraft(site) });
+      setSlugDrafts((current) => {
+        const next = { ...current };
+        delete next[site.id];
+        return next;
+      });
+      setSlugNotices((current) => ({
+        ...current,
+        [site.id]: { type: 'info', message: '저장됨' },
+      }));
+    } catch (err) {
+      const message = err instanceof Error && err.message
+        ? err.message
+        : 'URL 슬러그 저장에 실패했습니다.';
+      setSlugNotices((current) => ({
+        ...current,
+        [site.id]: {
+          type: 'error',
+          message: message.includes('slug') || message.includes('Slug')
+            ? '이미 사용 중인 URL 슬러그입니다.'
+            : message,
+        },
+      }));
+      console.error('사이트 URL 슬러그 저장 실패', err);
+    }
+  };
+
   const toggleVisibility = async (site: Site) => {
     try {
       await updateSiteInMode(activeMode, site.id, {
@@ -386,7 +433,7 @@ export default function SiteManager() {
           <input
             ref={newSiteFileInputRef}
             type="file"
-            accept="image/jpeg,image/png,image/webp,image/x-icon,.ico"
+            accept="image/jpeg,image/png,image/webp,image/gif"
             className="hidden"
             onChange={(e) => void handleNewSiteLogoFile(e.target.files?.[0])}
           />
@@ -436,7 +483,7 @@ export default function SiteManager() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-obsidian-500 bg-obsidian-600">
-              {['로고', '사이트명', '카테고리', '이동 URL', '상태', '노출', 'TOP10', '순서', '로고', ''].map((header) => (
+              {['로고', '사이트명', '카테고리', '이동 URL', 'pSEO URL', '상태', '노출', 'TOP10', '순서', '로고', ''].map((header) => (
                 <th key={header} className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
                   {header}
                 </th>
@@ -452,6 +499,10 @@ export default function SiteManager() {
               const isFeatured = site.isFeatured || site.is_featured;
               const featuredOrder = site.featuredOrder ?? site.featured_order ?? 0;
               const status = getSiteStatusMeta(site.status, true);
+              const slugDraft = getSlugDraft(site);
+              const slugNotice = slugNotices[site.id];
+              const previewPath = sitePath({ ...site, seo_slug: slugDraft });
+              const previewUrl = `https://junchae.com${previewPath}`;
 
               return (
                 <tr key={site.id} className={`border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors ${isHidden ? 'opacity-55' : ''}`}>
@@ -560,6 +611,45 @@ export default function SiteManager() {
                         </button>
                       </div>
                     )}
+                  </td>
+                  <td className="px-3 py-2.5 min-w-[240px]">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-1">
+                        <input
+                          value={slugDraft}
+                          onChange={(e) => updateSlugDraft(site, e.target.value)}
+                          placeholder="site-slug"
+                          className="w-32 px-2 py-1 text-xs bg-obsidian-700 border border-obsidian-500 rounded text-white focus:outline-none focus:border-neon-orange font-mono"
+                        />
+                        <button
+                          onClick={() => fillAutoSlug(site)}
+                          className="px-2 py-1 text-[11px] font-bold rounded bg-obsidian-700 border border-obsidian-500 text-slate-300 hover:border-neon-orange/50"
+                        >
+                          자동
+                        </button>
+                        <button
+                          onClick={() => void saveSlug(site)}
+                          className="px-2 py-1 text-[11px] font-bold rounded bg-neon-orange text-white hover:bg-neon-orangeDark"
+                        >
+                          저장
+                        </button>
+                        <a
+                          href={previewPath}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="p-1 text-slate-500 hover:text-neon-orange"
+                          title="내부 페이지 열기"
+                        >
+                          <ExternalLink size={12} />
+                        </a>
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-mono truncate">{previewUrl}</div>
+                      {slugNotice && (
+                        <div className={`text-[10px] ${slugNotice.type === 'error' ? 'text-red-300' : 'text-emerald-300'}`}>
+                          {slugNotice.message}
+                        </div>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-2.5">
                     <div className="flex items-center gap-2">
@@ -697,7 +787,7 @@ export default function SiteManager() {
               <input
                 ref={modalFileInputRef}
                 type="file"
-                accept="image/jpeg,image/png,image/webp,image/x-icon,.ico"
+                accept="image/jpeg,image/png,image/webp,image/gif"
                 className="hidden"
                 onChange={(e) => {
                   const file = e.target.files?.[0];

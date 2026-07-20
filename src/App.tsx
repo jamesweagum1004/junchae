@@ -5,6 +5,7 @@ import { AdminAuthProvider, useAdminAuth } from './context/AdminAuthContext';
 import MainPage from './pages/MainPage';
 import AdminPage from './pages/AdminPage';
 import CategoryPage from './pages/CategoryPage';
+import SitePage from './pages/SitePage';
 import NotFoundPage from './pages/NotFoundPage';
 import SeoHeadManager from './components/SeoHeadManager';
 import AnalyticsTracker from './components/AnalyticsTracker';
@@ -16,6 +17,7 @@ function DynamicRouter() {
 
   if (path === '') return <MainPage />;
   if (path.startsWith('category/') && path.length > 'category/'.length) return <CategoryPage />;
+  if (path.startsWith('site/') && path.length > 'site/'.length) return <SitePage />;
   if (!isConfigLoaded) return null;
   if (path === adminPath) return <AdminPage />;
   return <NotFoundPage />;

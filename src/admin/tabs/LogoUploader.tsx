@@ -38,7 +38,7 @@ export default function LogoUploader() {
       <p className="text-sm font-semibold text-slate-300">{label}</p>
       <p className="text-xs text-slate-600 mt-1">PNG, SVG, ICO — 드래그하거나 클릭</p>
       <p className="text-[10px] text-neon-orange/50 mt-1 font-mono">→ /uploads/logos/ 에 자동 저장</p>
-      <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={(e) => {
+      <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={(e) => {
         const file = e.target.files?.[0];
         if (!file) return;
         const reader = new FileReader();

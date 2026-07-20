@@ -55,7 +55,7 @@ const badgeColorMap: Record<string, string> = {
 interface SiteRowProps {
   site: Site;
   isSecure: boolean;
-  onClick: (url: string, name: string) => void;
+  onClick: (site: Site) => void;
 }
 
 function SiteRow({ site, isSecure, onClick }: SiteRowProps) {
@@ -65,7 +65,7 @@ function SiteRow({ site, isSecure, onClick }: SiteRowProps) {
     <button
       onClick={(e) => {
         e.stopPropagation();
-        onClick(site.url, site.name);
+        onClick(site);
       }}
       className={`group w-full min-h-[58px] md:min-h-0 flex items-center gap-2 px-2 py-2 md:gap-2.5 md:px-3 md:py-2.5 rounded-lg md:rounded-xl text-left transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] ${
         isSecure
@@ -168,10 +168,11 @@ function InterAdCard({ ad, isSecure, onClick }: { ad: InterAd; isSecure: boolean
 }
 
 interface CategoryGridProps {
-  onSiteClick: (url: string, name: string) => void;
+  onSiteClick: (site: Site) => void;
+  onAdClick: (url: string, name: string) => void;
 }
 
-export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
+export default function CategoryGrid({ onSiteClick, onAdClick }: CategoryGridProps) {
   const navigate = useNavigate();
   const { isSecure } = useTheme();
   const { categories, interAds } = useData();
@@ -248,7 +249,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
             </div>
 
             {(adsAfterIndex.get(index) || []).map((ad) => (
-              <InterAdCard key={ad.id} ad={ad} isSecure={isSecure} onClick={onSiteClick} />
+              <InterAdCard key={ad.id} ad={ad} isSecure={isSecure} onClick={onAdClick} />
             ))}
           </Fragment>
         );

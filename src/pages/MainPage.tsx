@@ -9,10 +9,14 @@ import AdsGrid from '../components/AdsGrid';
 import CategoryGrid from '../components/CategoryGrid';
 import AIBridgeOverlay from '../components/AIBridgeOverlay';
 import { categoryPath } from '../lib/categorySlug';
+import { sitePath } from '../lib/siteSlug';
 import { getSiteStatusMeta } from '../lib/siteStatus';
+import { useIsMobile } from '../hooks/useIsMobile';
+import type { Site } from '../data/categories';
 
 export default function MainPage() {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const { isSecure, setMode } = useTheme();
   const { categories, secureCategories, telegramLink, telegramVisible } = useData();
   const featuredSites = categories
@@ -31,7 +35,15 @@ export default function MainPage() {
 
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
 
-  const handleSiteClick = (url: string, name: string) => {
+  const handleSiteClick = (site: Site) => {
+    if (isMobile) {
+      setOverlay({ url: site.url, name: site.name });
+      return;
+    }
+    navigate(sitePath(site));
+  };
+
+  const handleExternalClick = (url: string, name: string) => {
     setOverlay({ url, name });
   };
 
@@ -137,7 +149,7 @@ export default function MainPage() {
                   return (
                 <button
                   key={site.id}
-                  onClick={() => handleSiteClick(site.url, site.name)}
+                  onClick={() => handleSiteClick(site)}
                   className={`group min-h-[72px] sm:min-h-[104px] rounded-xl sm:rounded-2xl border px-2.5 py-2.5 sm:p-4 text-left transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] ${
                     isSecure
                       ? 'glass-dark border-white/[0.08] hover:border-neon-orange/35'
@@ -196,7 +208,7 @@ export default function MainPage() {
 
         {/* Premium Ads */}
         <section className="clear-both">
-          <AdsGrid onAdClick={handleSiteClick} />
+          <AdsGrid onAdClick={handleExternalClick} />
         </section>
 
         {/* Category Grid — fully decoupled independent grid */}
@@ -208,7 +220,7 @@ export default function MainPage() {
             </span>
             <ChevronRight size={12} className={isSecure ? 'text-slate-600' : 'text-slate-300'} />
           </div>
-          <CategoryGrid onSiteClick={handleSiteClick} />
+          <CategoryGrid onSiteClick={handleSiteClick} onAdClick={handleExternalClick} />
         </section>
 
         {/* Lock Teaser — only in Standard mode */}

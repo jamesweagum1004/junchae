@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BarChart2, CheckCircle } from 'lucide-react';
+import { BarChart2, CheckCircle, Info } from 'lucide-react';
 import ModeSubTabs from '../ModeSubTabs';
 import { loadSettings, saveSettings } from '../../lib/adminApi';
 
@@ -7,7 +7,7 @@ export default function AnalyticsSettings() {
   const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('standard');
   const [ga4Script, setGa4Script] = useState('');
   const [gsc, setGsc] = useState('');
-  const [saved, setSaved] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
     loadSettings(activeMode, 'sitekit')
@@ -24,41 +24,31 @@ export default function AnalyticsSettings() {
         ga4_script: ga4Script,
         search_console_meta: gsc,
       });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2500);
+      setMessage({ type: 'success', text: 'Google Site Kit 설정을 저장했습니다.' });
+      setTimeout(() => setMessage(null), 2500);
     } catch (err) {
       console.error('SiteKit 설정 저장 실패', err);
-      alert('SiteKit 설정 저장에 실패했습니다.');
+      setMessage({ type: 'error', text: 'Google Site Kit 설정 저장에 실패했습니다.' });
     }
   };
-
-  const stats = activeMode === 'secure'
-    ? [
-        { label: '안전 모드 방문자', value: '18,742', change: '+24.3%', positive: true },
-        { label: '브릿지 클릭', value: '12,481', change: '+31.7%', positive: true },
-        { label: '평균 우회 시간', value: '4.5s', change: '0%', positive: true },
-      ]
-    : [
-        { label: '일반 모드 방문자', value: '12,480', change: '+8.3%', positive: true },
-        { label: '페이지뷰', value: '89,231', change: '+14.1%', positive: true },
-        { label: '평균 세션 시간', value: '3m 22s', change: '-1.2%', positive: false },
-      ];
 
   return (
     <div className="space-y-6 max-w-2xl">
       <ModeSubTabs activeMode={activeMode} onModeChange={setActiveMode} />
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {stats.map((stat) => (
-          <div key={stat.label} className="p-4 bg-obsidian-600 border border-obsidian-500 rounded-xl">
-            <BarChart2 size={14} className="text-neon-orange mb-2" />
-            <p className="text-xl font-black text-white">{stat.value}</p>
-            <p className="text-xs text-slate-500 mt-0.5">{stat.label}</p>
-            <span className={`text-[10px] font-semibold ${stat.positive ? 'text-emerald-400' : 'text-red-400'}`}>
-              {stat.change} vs 어제
-            </span>
+      <div className="p-5 bg-obsidian-600 border border-obsidian-500 rounded-xl">
+        <div className="flex items-start gap-3">
+          <div className="w-9 h-9 rounded-lg bg-neon-orange/10 border border-neon-orange/30 flex items-center justify-center flex-shrink-0">
+            <BarChart2 size={16} className="text-neon-orange" />
           </div>
-        ))}
+          <div>
+            <h2 className="text-base font-black text-white">Google Site Kit</h2>
+            <p className="mt-1 text-sm text-slate-400">아직 Google API 직접 연동 전입니다.</p>
+            <p className="mt-1 text-xs text-slate-500">
+              현재 이 화면에서는 GA4 추적 스크립트와 Search Console 인증 코드만 관리합니다.
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="space-y-4 p-5 bg-obsidian-600 rounded-xl border border-obsidian-500">
@@ -89,9 +79,21 @@ export default function AnalyticsSettings() {
           onClick={() => void save()}
           className="w-full py-2.5 bg-neon-orange text-white text-sm font-semibold rounded-lg hover:bg-neon-orangeDark flex items-center justify-center gap-2 transition-colors"
         >
-          {saved ? <CheckCircle size={14} /> : null}
-          {saved ? '저장됨' : '스크립트 저장 및 적용'}
+          {message?.type === 'success' ? <CheckCircle size={14} /> : null}
+          스크립트 저장 및 적용
         </button>
+        {message && (
+          <div
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium ${
+              message.type === 'success'
+                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                : 'bg-red-500/10 text-red-300 border-red-500/30'
+            }`}
+          >
+            <Info size={13} />
+            {message.text}
+          </div>
+        )}
       </div>
     </div>
   );

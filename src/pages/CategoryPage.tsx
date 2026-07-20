@@ -7,7 +7,9 @@ import { useTheme } from '../context/ThemeContext';
 import { useData } from '../context/DataContext';
 import type { Category, Site } from '../data/categories';
 import { categoryPath, getCategorySlug, slugifyCategoryName } from '../lib/categorySlug';
+import { sitePath } from '../lib/siteSlug';
 import { getSiteStatusMeta } from '../lib/siteStatus';
+import { useIsMobile } from '../hooks/useIsMobile';
 
 const siteName = '전체닷컴';
 
@@ -70,14 +72,14 @@ function SiteCard({
 }: {
   site: Site;
   isSecure: boolean;
-  onClick: (url: string, name: string) => void;
+  onClick: (site: Site) => void;
 }) {
   const status = getSiteStatusMeta(site.status, isSecure);
   const description = site.seo_description || site.description;
 
   return (
     <button
-      onClick={() => onClick(site.url, site.name)}
+      onClick={() => onClick(site)}
       className={`group w-full min-h-[72px] md:min-h-0 rounded-xl md:rounded-2xl border p-2.5 md:p-4 text-left transition-all duration-200 hover:scale-[1.01] active:scale-[0.99] ${
         isSecure
           ? 'glass-dark border-white/[0.08] hover:border-neon-orange/30'
@@ -138,6 +140,7 @@ function SiteCard({
 export default function CategoryPage() {
   const location = useLocation();
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const { isSecure } = useTheme();
   const { categories } = useData();
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
@@ -193,8 +196,12 @@ export default function CategoryPage() {
     getOrCreateCanonical().href = canonical;
   }, [category, categoryMatch.matchedBy, navigate]);
 
-  const handleSiteClick = (url: string, name: string) => {
-    setOverlay({ url, name });
+  const handleSiteClick = (site: Site) => {
+    if (isMobile) {
+      setOverlay({ url: site.url, name: site.name });
+      return;
+    }
+    navigate(sitePath(site));
   };
 
   return (

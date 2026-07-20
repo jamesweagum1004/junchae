@@ -41,7 +41,7 @@ const TABS = [
   { id: 'logos', label: '로고/파비콘', icon: Image, desc: '이미지 업로드' },
   { id: 'deepseek', label: 'DeepSeek AI', icon: Cpu, desc: 'API 설정' },
   { id: 'ads', label: '광고 컨트롤러', icon: Megaphone, desc: '배너 관리' },
-  { id: 'analytics', label: 'Google SiteKit', icon: BarChart2, desc: 'GA/Search Console' },
+  { id: 'analytics', label: 'Google Site Kit', icon: BarChart2, desc: 'GA/Search Console' },
   { id: 'seo-files', label: 'SEO 파일 관리', icon: FileText, desc: 'robots/sitemap' },
   { id: 'pseo', label: 'pSEO 관리', icon: FileText, desc: '사이트별 메타' },
   { id: 'ai-seo', label: 'AI SEO 센터', icon: Search, desc: 'AI SEO 생성' },

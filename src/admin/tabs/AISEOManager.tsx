@@ -3,6 +3,7 @@ import { Bot, CheckCircle, Search, Wand2 } from 'lucide-react';
 import ModeSubTabs from '../ModeSubTabs';
 import { useData } from '../../context/DataContext';
 import { apiJson, apiMode, loadSettings, saveSettings, type AdminMode } from '../../lib/adminApi';
+import { getSiteSlug } from '../../lib/siteSlug';
 import type { Category, Site } from '../../data/categories';
 
 type SeoDraft = {
@@ -106,18 +107,21 @@ const stringifyPreviewValue = (value: unknown, fallback: string) => {
   return fallback;
 };
 
-const siteToDraft = (site: SeoSite): SeoDraft => ({
-  seo_title: site.seo_title || `${site.name} 최신 정보`,
-  seo_description: site.seo_description || site.description || '',
-  seo_keywords: site.seo_keywords || site.name,
-  seo_slug: site.seo_slug || site.name.toLowerCase().replace(/\s+/g, '-'),
-  seo_h1: site.seo_h1 || site.name,
-  seo_canonical: site.seo_canonical || site.url,
-  seo_og_title: site.seo_og_title || site.seo_title || site.name,
-  seo_og_description: site.seo_og_description || site.seo_description || site.description || '',
-  seo_og_image: site.seo_og_image || site.logo || '',
-  seo_score: site.seo_score || 0,
-});
+const siteToDraft = (site: SeoSite): SeoDraft => {
+  const slug = getSiteSlug(site);
+  return {
+    seo_title: site.seo_title || `${site.name} 최신 정보`,
+    seo_description: site.seo_description || site.description || '',
+    seo_keywords: site.seo_keywords || site.name,
+    seo_slug: slug,
+    seo_h1: site.seo_h1 || site.name,
+    seo_canonical: `https://junchae.com/site/${slug}`,
+    seo_og_title: site.seo_og_title || site.seo_title || site.name,
+    seo_og_description: site.seo_og_description || site.seo_description || site.description || '',
+    seo_og_image: site.seo_og_image || site.logo || '',
+    seo_score: site.seo_score || 0,
+  };
+};
 
 function GlobalSeoPanel({
   activeMode,
