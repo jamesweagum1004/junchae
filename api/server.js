@@ -16,11 +16,14 @@ const logoUploadDir =
   process.env.LOGO_UPLOAD_DIR || '/home/user/web/junchae.com/public_html/uploads/logos';
 const adUploadDir =
   process.env.AD_UPLOAD_DIR || '/home/user/web/junchae.com/public_html/uploads/ads';
+const sitePreviewUploadDir =
+  process.env.SITE_PREVIEW_UPLOAD_DIR || '/home/user/web/junchae.com/public_html/uploads/previews';
 const publicWebRoot =
   process.env.PUBLIC_WEB_ROOT || '/home/user/web/junchae.com/public_html';
 
 const logoPublicPath = '/uploads/logos';
 const adPublicPath = '/uploads/ads';
+const sitePreviewPublicPath = '/uploads/previews';
 const seoFilesMode = 'normal';
 const seoFilesSection = 'seo_files';
 const adminApiToken = (process.env.ADMIN_API_TOKEN || '').trim();
@@ -32,8 +35,10 @@ const defaultAdminPassword = 'change-me-now';
 const scryptAsync = promisify(crypto.scrypt);
 const maxLogoSize = 2 * 1024 * 1024;
 const maxAdImageSize = 5 * 1024 * 1024;
+const maxSitePreviewSize = 5 * 1024 * 1024;
 const allowedLogoExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.ico']);
 const allowedAdImageExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+const allowedSitePreviewExtensions = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
 const allowedLogoMimeTypes = new Set([
   'image/jpeg',
   'image/png',
@@ -48,6 +53,7 @@ const allowedAdImageMimeTypes = new Set([
   'image/webp',
   'image/gif',
 ]);
+const allowedSitePreviewMimeTypes = allowedAdImageMimeTypes;
 
 const defaultRobotsTxt = `User-agent: *
 Allow: /
@@ -106,6 +112,10 @@ const siteColumns = [
   'seo_og_title',
   'seo_og_description',
   'seo_og_image',
+  'seo_intro',
+  'seo_features',
+  'seo_faq',
+  'preview_image',
   'seo_score',
   'seo_updated_at',
   'is_hidden',
@@ -161,6 +171,10 @@ const seoColumns = [
   'seo_og_title',
   'seo_og_description',
   'seo_og_image',
+  'seo_intro',
+  'seo_features',
+  'seo_faq',
+  'preview_image',
   'seo_score',
 ];
 
@@ -269,6 +283,18 @@ const uploadAdImage = multer({
     const ext = path.extname(file.originalname || '').toLowerCase();
     if (!allowedAdImageExtensions.has(ext) || !allowedAdImageMimeTypes.has(file.mimetype)) {
       return cb(new Error('INVALID_AD_IMAGE_FILE_TYPE'));
+    }
+    return cb(null, true);
+  },
+});
+
+const uploadSitePreview = multer({
+  storage: makeStorage(sitePreviewUploadDir, 'preview', allowedSitePreviewExtensions, '.png'),
+  limits: { fileSize: maxSitePreviewSize },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (!allowedSitePreviewExtensions.has(ext) || !allowedSitePreviewMimeTypes.has(file.mimetype)) {
+      return cb(new Error('INVALID_SITE_PREVIEW_FILE_TYPE'));
     }
     return cb(null, true);
   },
@@ -608,6 +634,10 @@ function normalizeSiteInput(body) {
     logo: normalizeOptionalText(body.logo),
     status: normalizeSiteStatus(body.status || 'normal'),
     seo_slug: normalizeSiteSlug(body.seo_slug),
+    seo_intro: normalizeOptionalText(body.seo_intro),
+    seo_features: normalizeSeoLongTextValue(body.seo_features),
+    seo_faq: normalizeSeoLongTextValue(body.seo_faq),
+    preview_image: normalizeOptionalText(body.preview_image),
     is_hidden: normalizeBooleanInt(body.is_hidden ?? body.isHidden, 0),
     is_featured: normalizeBooleanInt(body.is_featured ?? body.isFeatured, 0),
     featured_order: normalizeSortOrder(body.featured_order ?? body.featuredOrder),
@@ -616,6 +646,13 @@ function normalizeSiteInput(body) {
 }
 
 function normalizeCategorySeoValue(value) {
+  if (Array.isArray(value) || (value && typeof value === 'object')) {
+    return JSON.stringify(value);
+  }
+  return normalizeOptionalText(value);
+}
+
+function normalizeSeoLongTextValue(value) {
   if (Array.isArray(value) || (value && typeof value === 'object')) {
     return JSON.stringify(value);
   }
@@ -651,6 +688,8 @@ function pickEditableSiteUpdates(body) {
       updates[column] = normalizeSiteStatus(body[column]);
     } else if (column === 'seo_slug') {
       updates[column] = normalizeSiteSlug(body[column]);
+    } else if (column === 'seo_features' || column === 'seo_faq') {
+      updates[column] = normalizeSeoLongTextValue(body[column]);
     } else if (column === 'name' || column === 'url') {
       updates[column] = normalizeRequiredText(body[column]);
     } else {
@@ -800,7 +839,11 @@ async function initializeDatabase() {
   await ensureColumn('sites', 'seo_og_title', 'VARCHAR(255) NULL', 'seo_canonical');
   await ensureColumn('sites', 'seo_og_description', 'TEXT NULL', 'seo_og_title');
   await ensureColumn('sites', 'seo_og_image', 'VARCHAR(500) NULL', 'seo_og_description');
-  await ensureColumn('sites', 'seo_score', 'INT NOT NULL DEFAULT 0', 'seo_og_image');
+  await ensureColumn('sites', 'seo_intro', 'TEXT NULL', 'seo_og_image');
+  await ensureColumn('sites', 'seo_features', 'LONGTEXT NULL', 'seo_intro');
+  await ensureColumn('sites', 'seo_faq', 'LONGTEXT NULL', 'seo_features');
+  await ensureColumn('sites', 'preview_image', 'VARCHAR(500) NULL', 'seo_faq');
+  await ensureColumn('sites', 'seo_score', 'INT NOT NULL DEFAULT 0', 'preview_image');
   await ensureColumn('sites', 'seo_updated_at', 'TIMESTAMP NULL', 'seo_score');
   await ensureColumn('sites', 'sort_order', 'INT NOT NULL DEFAULT 0', 'status');
   await ensureColumn('sites', 'is_hidden', 'TINYINT(1) NOT NULL DEFAULT 0', 'sort_order');
@@ -1696,6 +1739,10 @@ function formatSeo(site) {
     seo_og_title: site.seo_og_title || site.seo_title || `${site.name} 최신 정보`,
     seo_og_description: site.seo_og_description || site.seo_description || site.description || '',
     seo_og_image: site.seo_og_image || site.logo || '',
+    seo_intro: site.seo_intro || '',
+    seo_features: site.seo_features || '',
+    seo_faq: site.seo_faq || '',
+    preview_image: site.preview_image || '',
     seo_score: Number(site.seo_score) || 0,
     seo_updated_at: site.seo_updated_at || null,
   };
@@ -1990,6 +2037,8 @@ app.patch('/api/sites/:id/seo', requireAdminToken, asyncRoute(async (req, res) =
       updates[column] = normalizeSeoScore(req.body[column]);
     } else if (column === 'seo_slug') {
       updates[column] = normalizeSiteSlug(req.body[column]);
+    } else if (column === 'seo_features' || column === 'seo_faq') {
+      updates[column] = normalizeSeoLongTextValue(req.body[column]);
     } else {
       updates[column] = normalizeOptionalText(req.body[column]);
     }
@@ -2076,6 +2125,7 @@ ${promptTemplate}
 
 아래 사이트의 SEO 데이터를 한국어 JSON으로 생성하세요.
 반드시 JSON만 출력하세요.
+secure mode 또는 민감 카테고리에서는 중립적인 디렉토리 설명으로 작성하고, 우회/불법/무료 다운로드/무단 공유를 권장하지 마세요.
 
 사이트명: ${site.name}
 URL: ${site.url}
@@ -2087,7 +2137,13 @@ URL: ${site.url}
 
 JSON 필드:
 seo_title, seo_description, seo_keywords 배열, seo_slug, seo_h1,
-seo_og_title, seo_og_description, seo_score 숫자, recommendations 배열
+seo_og_title, seo_og_description, seo_intro, seo_features 배열,
+seo_faq 배열 [{"question":"...", "answer":"..."}],
+seo_score 숫자, recommendations 배열
+
+seo_intro는 2~4문단 정도의 사이트 상세 페이지 본문으로 작성하세요.
+seo_features는 3~6개의 주요 기능/특징으로 작성하세요.
+seo_faq는 3~5개의 질문/답변으로 작성하세요.
 `;
 
   try {
@@ -2634,6 +2690,30 @@ app.post('/api/uploads/ad-image', requireAdminToken, (req, res) => {
   });
 });
 
+app.post('/api/uploads/site-preview', requireAdminToken, (req, res) => {
+  uploadSitePreview.single('image')(req, res, (err) => {
+    if (err) {
+      console.error('Site preview upload error:', err);
+      const error =
+        err.code === 'LIMIT_FILE_SIZE'
+          ? 'SITE_PREVIEW_FILE_TOO_LARGE'
+          : err.message === 'INVALID_SITE_PREVIEW_FILE_TYPE'
+            ? 'INVALID_SITE_PREVIEW_FILE_TYPE'
+            : 'SITE_PREVIEW_UPLOAD_FAILED';
+      return jsonError(res, 400, error);
+    }
+
+    if (!req.file) {
+      return jsonError(res, 400, 'SITE_PREVIEW_FILE_REQUIRED', 'form-data field "image" is required.');
+    }
+
+    return res.status(201).json({
+      ok: true,
+      data: { url: publicUrlForFile(sitePreviewPublicPath, req.file.filename) },
+    });
+  });
+});
+
 app.post('/api/uploads/logo/from-url', requireAdminToken, asyncRoute(async (req, res) => {
   const sourceUrl = normalizeOptionalText(req.body?.url);
   if (!sourceUrl) {
@@ -2708,8 +2788,8 @@ app.post('/api/sites', requireAdminToken, asyncRoute(async (req, res) => {
 
   const [result] = await db.execute(
     `INSERT INTO sites
-     (mode, name, url, category, description, logo, status, seo_slug, is_hidden, is_featured, featured_order, sort_order)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (mode, name, url, category, description, logo, status, seo_slug, seo_intro, seo_features, seo_faq, preview_image, is_hidden, is_featured, featured_order, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       site.mode,
       site.name,
@@ -2719,6 +2799,10 @@ app.post('/api/sites', requireAdminToken, asyncRoute(async (req, res) => {
       site.logo,
       site.status,
       site.seo_slug,
+      site.seo_intro,
+      site.seo_features,
+      site.seo_faq,
+      site.preview_image,
       site.is_hidden,
       site.is_featured,
       site.featured_order,

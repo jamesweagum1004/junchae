@@ -16,6 +16,10 @@ type SeoDraft = {
   seo_og_title: string;
   seo_og_description: string;
   seo_og_image: string;
+  seo_intro: string;
+  seo_features: string;
+  seo_faq: string;
+  preview_image: string;
   seo_score: number;
 };
 
@@ -46,6 +50,10 @@ const emptyDraft: SeoDraft = {
   seo_og_title: '',
   seo_og_description: '',
   seo_og_image: '',
+  seo_intro: '',
+  seo_features: '',
+  seo_faq: '',
+  preview_image: '',
   seo_score: 0,
 };
 
@@ -73,6 +81,10 @@ const textKeys: Array<keyof Omit<SeoDraft, 'seo_score'>> = [
   'seo_og_title',
   'seo_og_description',
   'seo_og_image',
+  'seo_intro',
+  'seo_features',
+  'seo_faq',
+  'preview_image',
 ];
 
 const globalSeoFields: Array<{ key: keyof GlobalSeoSettings; label: string; multiline?: boolean }> = [
@@ -98,6 +110,10 @@ const siteTextFields: Array<{ key: keyof Omit<SeoDraft, 'seo_score'>; label: str
   { key: 'seo_description', label: '메타 설명', multiline: true },
   { key: 'seo_keywords', label: '키워드', multiline: true },
   { key: 'seo_og_description', label: 'OG 설명', multiline: true },
+  { key: 'seo_intro', label: '상세 소개 본문', multiline: true },
+  { key: 'seo_features', label: '주요 기능/특징', multiline: true },
+  { key: 'seo_faq', label: 'FAQ JSON', multiline: true },
+  { key: 'preview_image', label: '미리보기 이미지' },
 ];
 
 const stringifyPreviewValue = (value: unknown, fallback: string) => {
@@ -105,6 +121,20 @@ const stringifyPreviewValue = (value: unknown, fallback: string) => {
   if (typeof value === 'string') return value;
   if (typeof value === 'number') return String(value);
   return fallback;
+};
+
+const stringifyFeaturePreview = (value: unknown, fallback: string) => {
+  if (!Array.isArray(value)) return stringifyPreviewValue(value, fallback);
+  return value
+    .map((item) => (typeof item === 'string' ? item : String(item?.title || item?.text || item?.feature || '')))
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .join('\n');
+};
+
+const stringifyFaqPreview = (value: unknown, fallback: string) => {
+  if (!Array.isArray(value)) return stringifyPreviewValue(value, fallback);
+  return JSON.stringify(value, null, 2);
 };
 
 const siteToDraft = (site: SeoSite): SeoDraft => {
@@ -119,6 +149,10 @@ const siteToDraft = (site: SeoSite): SeoDraft => {
     seo_og_title: site.seo_og_title || site.seo_title || site.name,
     seo_og_description: site.seo_og_description || site.seo_description || site.description || '',
     seo_og_image: site.seo_og_image || site.logo || '',
+    seo_intro: site.seo_intro || '',
+    seo_features: site.seo_features || '',
+    seo_faq: typeof site.seo_faq === 'string' ? site.seo_faq : JSON.stringify(site.seo_faq || [], null, 2),
+    preview_image: site.preview_image || '',
     seo_score: site.seo_score || 0,
   };
 };
@@ -388,7 +422,13 @@ export default function AISEOManager() {
     if (!aiPreview) return;
     const next = { ...draft };
     textKeys.forEach((key) => {
-      next[key] = stringifyPreviewValue(aiPreview[key], next[key]);
+      if (key === 'seo_features') {
+        next[key] = stringifyFeaturePreview(aiPreview[key], next[key]);
+      } else if (key === 'seo_faq') {
+        next[key] = stringifyFaqPreview(aiPreview[key], next[key]);
+      } else {
+        next[key] = stringifyPreviewValue(aiPreview[key], next[key]);
+      }
     });
     next.seo_og_title = stringifyPreviewValue(aiPreview.seo_og_title || aiPreview.seo_title, next.seo_og_title);
     next.seo_og_description = stringifyPreviewValue(

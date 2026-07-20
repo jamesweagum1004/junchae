@@ -30,6 +30,10 @@ export interface Site {
   seo_og_title?: string;
   seo_og_description?: string;
   seo_og_image?: string;
+  seo_intro?: string;
+  seo_features?: string;
+  seo_faq?: string | { question: string; answer: string }[];
+  preview_image?: string;
   seo_score?: number;
   seo_updated_at?: string | null;
   is_hidden?: boolean;

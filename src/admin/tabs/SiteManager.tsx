@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { Fragment, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -34,6 +34,20 @@ type LogoUploadResult = {
   ok: true;
   data: { url: string };
 };
+
+type SiteDetailDraft = {
+  seo_intro: string;
+  seo_features: string;
+  seo_faq: string;
+  preview_image: string;
+};
+
+const detailDraftFromSite = (site: Site): SiteDetailDraft => ({
+  seo_intro: site.seo_intro || '',
+  seo_features: site.seo_features || '',
+  seo_faq: typeof site.seo_faq === 'string' ? site.seo_faq : JSON.stringify(site.seo_faq || [], null, 2),
+  preview_image: site.preview_image || '',
+});
 
 export default function SiteManager() {
   const {
@@ -93,6 +107,10 @@ export default function SiteManager() {
   const [editingNameValue, setEditingNameValue] = useState('');
   const [slugDrafts, setSlugDrafts] = useState<Record<number, string>>({});
   const [slugNotices, setSlugNotices] = useState<Record<number, { type: 'info' | 'error'; message: string }>>({});
+  const [expandedDetailId, setExpandedDetailId] = useState<number | null>(null);
+  const [detailDrafts, setDetailDrafts] = useState<Record<number, SiteDetailDraft>>({});
+  const [detailNotices, setDetailNotices] = useState<Record<number, { type: 'info' | 'error'; message: string }>>({});
+  const [previewUploadingId, setPreviewUploadingId] = useState<number | null>(null);
   const modalFileInputRef = useRef<HTMLInputElement>(null);
   const newSiteFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -116,6 +134,17 @@ export default function SiteManager() {
     const body = new FormData();
     body.append('logo', file);
     const res = await fetch('/api/uploads/logo', {
+      method: 'POST',
+      headers: adminAuthHeaders(),
+      body,
+    });
+    return parseUploadResponse(res);
+  };
+
+  const uploadPreviewFile = async (file: File) => {
+    const body = new FormData();
+    body.append('image', file);
+    const res = await fetch('/api/uploads/site-preview', {
       method: 'POST',
       headers: adminAuthHeaders(),
       body,
@@ -295,6 +324,62 @@ export default function SiteManager() {
         },
       }));
       console.error('사이트 URL 슬러그 저장 실패', err);
+    }
+  };
+
+  const getDetailDraft = (site: Site) => detailDrafts[site.id] || detailDraftFromSite(site);
+
+  const updateDetailDraft = (site: Site, field: keyof SiteDetailDraft, value: string) => {
+    setDetailDrafts((current) => ({
+      ...current,
+      [site.id]: {
+        ...(current[site.id] || detailDraftFromSite(site)),
+        [field]: value,
+      },
+    }));
+    setDetailNotices((current) => {
+      const next = { ...current };
+      delete next[site.id];
+      return next;
+    });
+  };
+
+  const saveDetails = async (site: Site) => {
+    const draft = getDetailDraft(site);
+    try {
+      await updateSiteInMode(activeMode, site.id, draft);
+      setDetailNotices((current) => ({
+        ...current,
+        [site.id]: { type: 'info', message: 'pSEO 상세 정보를 저장했습니다.' },
+      }));
+    } catch (err) {
+      setDetailNotices((current) => ({
+        ...current,
+        [site.id]: { type: 'error', message: 'pSEO 상세 정보 저장에 실패했습니다.' },
+      }));
+      console.error('pSEO 상세 정보 저장 실패', err);
+    }
+  };
+
+  const savePreviewImage = async (site: Site, file: File | undefined) => {
+    if (!file) return;
+    setPreviewUploadingId(site.id);
+    try {
+      const imagePath = await uploadPreviewFile(file);
+      updateDetailDraft(site, 'preview_image', imagePath);
+      await updateSiteInMode(activeMode, site.id, { preview_image: imagePath });
+      setDetailNotices((current) => ({
+        ...current,
+        [site.id]: { type: 'info', message: '미리보기 이미지를 업로드했습니다.' },
+      }));
+    } catch (err) {
+      setDetailNotices((current) => ({
+        ...current,
+        [site.id]: { type: 'error', message: '미리보기 이미지 업로드에 실패했습니다.' },
+      }));
+      console.error('미리보기 이미지 업로드 실패', err);
+    } finally {
+      setPreviewUploadingId(null);
     }
   };
 
@@ -483,7 +568,7 @@ export default function SiteManager() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-obsidian-500 bg-obsidian-600">
-              {['로고', '사이트명', '카테고리', '이동 URL', 'pSEO URL', '상태', '노출', 'TOP10', '순서', '로고', ''].map((header) => (
+              {['로고', '사이트명', '카테고리', '이동 URL', 'pSEO URL', '상태', '노출', 'TOP10', '순서', '로고', '본문', ''].map((header) => (
                 <th key={header} className="px-3 py-2.5 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider whitespace-nowrap">
                   {header}
                 </th>
@@ -503,8 +588,12 @@ export default function SiteManager() {
               const slugNotice = slugNotices[site.id];
               const previewPath = sitePath({ ...site, seo_slug: slugDraft });
               const previewUrl = `https://junchae.com${previewPath}`;
+              const detailDraft = getDetailDraft(site);
+              const detailNotice = detailNotices[site.id];
+              const detailExpanded = expandedDetailId === site.id;
 
               return (
+                <Fragment key={site.id}>
                 <tr key={site.id} className={`border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors ${isHidden ? 'opacity-55' : ''}`}>
                   <td className="px-3 py-2.5">
                     <div className="w-8 h-8 rounded bg-white/90 border border-obsidian-500 flex items-center justify-center overflow-hidden p-1">
@@ -751,11 +840,110 @@ export default function SiteManager() {
                     </button>
                   </td>
                   <td className="px-3 py-2.5">
+                    <button
+                      onClick={() => setExpandedDetailId(detailExpanded ? null : site.id)}
+                      className={`px-2 py-1 rounded-lg border text-xs font-bold whitespace-nowrap ${
+                        detailExpanded
+                          ? 'bg-neon-orange/10 text-neon-orange border-neon-orange/30'
+                          : 'bg-obsidian-700 text-slate-400 border-obsidian-500 hover:border-neon-orange/50'
+                      }`}
+                    >
+                      pSEO
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5">
                     <button onClick={() => void remove(site.id)} className="text-slate-600 hover:text-red-400 transition-colors">
                       <Trash2 size={14} />
                     </button>
                   </td>
                 </tr>
+                {detailExpanded && (
+                  <tr className="border-b border-obsidian-600 bg-obsidian-800/60">
+                    <td colSpan={12} className="p-4">
+                      <div className="grid grid-cols-1 lg:grid-cols-[1fr_260px] gap-4">
+                        <div className="space-y-3">
+                          <label className="block space-y-1">
+                            <span className="text-[11px] font-bold text-slate-400">상세 소개 본문</span>
+                            <textarea
+                              value={detailDraft.seo_intro}
+                              onChange={(e) => updateDetailDraft(site, 'seo_intro', e.target.value)}
+                              rows={4}
+                              placeholder="이 사이트가 어떤 서비스인지, 어떤 정보를 제공하는지 설명"
+                              className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange resize-y"
+                            />
+                          </label>
+                          <label className="block space-y-1">
+                            <span className="text-[11px] font-bold text-slate-400">주요 기능/특징</span>
+                            <textarea
+                              value={detailDraft.seo_features}
+                              onChange={(e) => updateDetailDraft(site, 'seo_features', e.target.value)}
+                              rows={4}
+                              placeholder={'빠른 검색 결과 제공\n뉴스/이미지/동영상/지도 검색 지원\n한국 사용자에게 익숙한 포털 서비스'}
+                              className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange resize-y"
+                            />
+                          </label>
+                          <label className="block space-y-1">
+                            <span className="text-[11px] font-bold text-slate-400">FAQ</span>
+                            <textarea
+                              value={detailDraft.seo_faq}
+                              onChange={(e) => updateDetailDraft(site, 'seo_faq', e.target.value)}
+                              rows={5}
+                              placeholder={'[\n  {"question":"...", "answer":"..."},\n  {"question":"...", "answer":"..."},\n  {"question":"...", "answer":"..."}\n]'}
+                              className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange resize-y font-mono"
+                            />
+                          </label>
+                        </div>
+
+                        <div className="space-y-3">
+                          <label className="block space-y-1">
+                            <span className="text-[11px] font-bold text-slate-400">사이트 메인 이미지 / 스크린샷</span>
+                            <input
+                              value={detailDraft.preview_image}
+                              onChange={(e) => updateDetailDraft(site, 'preview_image', e.target.value)}
+                              placeholder="/uploads/previews/site.png"
+                              className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange font-mono"
+                            />
+                          </label>
+                          <p className="text-[11px] text-slate-500">선택 사항입니다. 없으면 로고만 표시됩니다.</p>
+                          <label className="inline-flex items-center justify-center gap-1.5 w-full px-3 py-2 text-xs font-bold rounded-lg border border-obsidian-500 text-slate-300 bg-obsidian-700 hover:border-neon-orange/50 cursor-pointer">
+                            <Upload size={13} />
+                            {previewUploadingId === site.id ? '업로드 중...' : '이미지 업로드'}
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp,image/gif"
+                              className="hidden"
+                              onChange={(e) => {
+                                void savePreviewImage(site, e.target.files?.[0]);
+                                e.target.value = '';
+                              }}
+                            />
+                          </label>
+                          {detailDraft.preview_image && (
+                            <div className="overflow-hidden rounded-xl border border-obsidian-500 bg-white">
+                              <img src={detailDraft.preview_image} alt={`${site.name} 미리보기`} className="w-full h-36 object-cover object-top" />
+                            </div>
+                          )}
+                          {detailNotice && (
+                            <div className={`rounded-lg border px-3 py-2 text-xs ${
+                              detailNotice.type === 'error'
+                                ? 'bg-red-500/10 text-red-300 border-red-500/30'
+                                : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                            }`}>
+                              {detailNotice.message}
+                            </div>
+                          )}
+                          <button
+                            onClick={() => void saveDetails(site)}
+                            className="w-full px-3 py-2 text-xs font-bold rounded-lg bg-neon-orange text-white hover:bg-neon-orangeDark"
+                          >
+                            pSEO 상세 저장
+                          </button>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>
