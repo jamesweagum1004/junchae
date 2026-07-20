@@ -45,6 +45,7 @@ export interface Site {
 export interface Category {
   id: string;
   name: string;
+  slug?: string;
   icon: string;
   color: string;
   sortOrder?: number;

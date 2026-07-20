@@ -16,7 +16,8 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { isVisibleAd, useData } from '../context/DataContext';
-import { Site, InterAd } from '../data/categories';
+import { Category, Site, InterAd } from '../data/categories';
+import { categoryPath } from '../lib/categorySlug';
 import { getSiteStatusMeta } from '../lib/siteStatus';
 
 const iconMap: Record<string, LucideIcon> = {
@@ -174,7 +175,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
   const navigate = useNavigate();
   const { isSecure } = useTheme();
   const { categories, interAds } = useData();
-  const openCategory = (categoryId: string) => navigate(`/category/${encodeURIComponent(categoryId)}`);
+  const openCategory = (category: Category) => navigate(categoryPath(category));
 
   const adsAfterIndex = new Map<number, InterAd[]>();
   interAds
@@ -199,9 +200,9 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
               role="button"
               tabIndex={0}
               aria-label={`${category.name} 전체 보기`}
-              onClick={() => openCategory(category.id)}
+              onClick={() => openCategory(category)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') openCategory(category.id);
+                if (e.key === 'Enter' || e.key === ' ') openCategory(category);
               }}
               className={`rounded-2xl border p-2.5 sm:p-3 transition-all duration-200 flex flex-col ${
                 isSecure
@@ -232,7 +233,7 @@ export default function CategoryGrid({ onSiteClick }: CategoryGridProps) {
                 <button
                   onClick={(e) => {
                     e.stopPropagation();
-                    openCategory(category.id);
+                    openCategory(category);
                   }}
                   className={`mt-2 w-full flex items-center justify-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition-all duration-200 ${
                     isSecure

@@ -3,6 +3,7 @@ import { Plus, Trash2, GripVertical, FolderOpen, Edit3, Check, X, Wand2, Save } 
 import { useData } from '../../context/DataContext';
 import ModeSubTabs from '../ModeSubTabs';
 import { apiJson, apiMode } from '../../lib/adminApi';
+import { slugifyCategoryName } from '../../lib/categorySlug';
 import type { Category } from '../../data/categories';
 
 type CategorySeoDraft = {
@@ -54,6 +55,8 @@ export default function CategoryManager() {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [localOrder, setLocalOrder] = useState<string[] | null>(null);
   const [seoDrafts, setSeoDrafts] = useState<Record<string, CategorySeoDraft>>({});
+  const [slugDrafts, setSlugDrafts] = useState<Record<string, string>>({});
+  const [slugNotices, setSlugNotices] = useState<Record<string, { type: 'info' | 'error'; message: string }>>({});
   const [generatingId, setGeneratingId] = useState<string | null>(null);
   const [generationNotices, setGenerationNotices] = useState<Record<string, { type: 'info' | 'error'; message: string }>>({});
 
@@ -72,6 +75,57 @@ export default function CategoryManager() {
   };
 
   const getDraft = (category: Category) => seoDrafts[category.id] || draftFromCategory(category);
+  const getSlugDraft = (category: Category) => slugDrafts[category.id] ?? category.slug ?? '';
+
+  const updateSlugDraft = (category: Category, value: string) => {
+    setSlugDrafts((current) => ({ ...current, [category.id]: value }));
+    setSlugNotices((current) => {
+      const next = { ...current };
+      delete next[category.id];
+      return next;
+    });
+  };
+
+  const fillAutoSlug = (category: Category) => {
+    updateSlugDraft(category, slugifyCategoryName(category.name, category.id));
+  };
+
+  const saveSlug = async (category: Category) => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await apiJson(`/api/categories/${category.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ slug: getSlugDraft(category) }),
+      });
+      await reloadCategories();
+      setSlugDrafts((current) => {
+        const next = { ...current };
+        delete next[category.id];
+        return next;
+      });
+      setSlugNotices((current) => ({
+        ...current,
+        [category.id]: { type: 'info', message: 'URL 슬러그를 저장했습니다.' },
+      }));
+    } catch (err) {
+      const message = err instanceof Error && err.message
+        ? err.message
+        : 'URL 슬러그 저장에 실패했습니다.';
+      setSlugNotices((current) => ({
+        ...current,
+        [category.id]: {
+          type: 'error',
+          message: message.includes('slug') || message.includes('Slug')
+            ? '이미 사용 중인 URL 슬러그입니다. 다른 값을 입력해 주세요.'
+            : message,
+        },
+      }));
+      console.error('Category slug save failed', err);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const updateDraft = (category: Category, field: keyof CategorySeoDraft, value: string) => {
     setSeoDrafts((current) => ({
@@ -234,6 +288,8 @@ export default function CategoryManager() {
           setActiveMode(mode);
           setLocalOrder(null);
           setSeoDrafts({});
+          setSlugDrafts({});
+          setSlugNotices({});
           setGenerationNotices({});
         }}
       />
@@ -262,6 +318,8 @@ export default function CategoryManager() {
       <div className="space-y-3">
         {orderedCategories.map((cat) => {
           const draft = getDraft(cat);
+          const slugDraft = getSlugDraft(cat);
+          const slugNotice = slugNotices[cat.id];
           const generationNotice = generationNotices[cat.id];
           return (
             <div key={cat.id} className="bg-obsidian-600 border border-obsidian-500 rounded-xl overflow-hidden">
@@ -324,6 +382,49 @@ export default function CategoryManager() {
               </div>
 
               <div className="border-t border-obsidian-500 p-3 space-y-3">
+                <div className="space-y-1.5">
+                  <label className="block text-[11px] font-bold text-slate-400">URL 슬러그</label>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      value={slugDraft}
+                      onChange={(e) => updateSlugDraft(cat, e.target.value)}
+                      placeholder="community"
+                      className="flex-1 px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => fillAutoSlug(cat)}
+                        className="px-3 py-2 text-xs font-bold rounded-lg border border-obsidian-500 text-slate-300 bg-obsidian-700 hover:border-neon-orange/50"
+                      >
+                        자동 생성
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void saveSlug(cat)}
+                        disabled={saving}
+                        className="px-3 py-2 text-xs font-bold rounded-lg bg-neon-orange text-white hover:bg-neon-orangeDark disabled:opacity-50"
+                      >
+                        저장
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    예: community, webtoon, sports-casino. 실제 URL은 /category/슬러그 로 생성됩니다.
+                  </p>
+                  {slugNotice && (
+                    <div
+                      className={`rounded-lg border px-3 py-2 text-xs font-medium ${
+                        slugNotice.type === 'error'
+                          ? 'bg-red-500/10 text-red-300 border-red-500/30'
+                          : 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30'
+                      }`}
+                    >
+                      {slugNotice.message}
+                    </div>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
                   <input
                     value={draft.seo_title}

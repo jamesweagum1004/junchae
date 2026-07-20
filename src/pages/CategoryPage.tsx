@@ -6,6 +6,7 @@ import AIBridgeOverlay from '../components/AIBridgeOverlay';
 import { useTheme } from '../context/ThemeContext';
 import { useData } from '../context/DataContext';
 import type { Category, Site } from '../data/categories';
+import { categoryPath, getCategorySlug, slugifyCategoryName } from '../lib/categorySlug';
 import { getSiteStatusMeta } from '../lib/siteStatus';
 
 const siteName = '전체닷컴';
@@ -141,28 +142,45 @@ export default function CategoryPage() {
   const { categories } = useData();
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
 
-  const categoryId = useMemo(() => {
+  const categoryParam = useMemo(() => {
     const raw = location.pathname.replace(/^\/category\/?/, '');
     return safeDecode(raw);
   }, [location.pathname]);
 
-  const category = useMemo(() => {
-    const byId = categories.find((item) => item.id === categoryId);
-    if (byId) return byId;
-    return categories.find((item) => item.name === categoryId);
-  }, [categories, categoryId]);
+  const categoryMatch = useMemo(() => {
+    const normalizedParam = categoryParam.trim().toLowerCase();
+    const bySlug = categories.find((item) => String(item.slug || '').toLowerCase() === normalizedParam);
+    if (bySlug) return { category: bySlug, matchedBy: 'slug' as const };
+
+    const byId = categories.find((item) => String(item.id) === categoryParam);
+    if (byId) return { category: byId, matchedBy: 'id' as const };
+
+    const byNameSlug = categories.find((item) => slugifyCategoryName(item.name, item.id) === normalizedParam);
+    if (byNameSlug) return { category: byNameSlug, matchedBy: 'nameSlug' as const };
+
+    const byName = categories.find((item) => item.name === categoryParam);
+    if (byName) return { category: byName, matchedBy: 'name' as const };
+
+    return { category: null, matchedBy: null };
+  }, [categories, categoryParam]);
+
+  const category = categoryMatch.category;
 
   const faqItems = useMemo(() => parseFaq(category?.seo_faq), [category?.seo_faq]);
 
   useEffect(() => {
     if (!category) return;
 
-    const encodedCategoryId = encodeURIComponent(category.id);
+    const canonicalPath = categoryPath(category);
+    if (categoryMatch.matchedBy === 'id' && getCategorySlug(category)) {
+      navigate(canonicalPath, { replace: true });
+    }
+
     const title = category.seo_title || `${category.name} 사이트 모음 - ${siteName}`;
     const description =
       category.seo_description ||
       `${category.name} 카테고리의 주요 사이트를 빠르게 확인할 수 있는 링크 모음입니다.`;
-    const canonical = `https://junchae.com/category/${encodedCategoryId}`;
+    const canonical = `https://junchae.com${canonicalPath}`;
 
     document.title = title;
     getOrCreateMeta('meta[name="description"]', { name: 'description' }).setAttribute('content', description);
@@ -173,7 +191,7 @@ export default function CategoryPage() {
     getOrCreateMeta('meta[property="og:site_name"]', { property: 'og:site_name' }).setAttribute('content', siteName);
     getOrCreateMeta('meta[property="og:url"]', { property: 'og:url' }).setAttribute('content', canonical);
     getOrCreateCanonical().href = canonical;
-  }, [category]);
+  }, [category, categoryMatch.matchedBy, navigate]);
 
   const handleSiteClick = (url: string, name: string) => {
     setOverlay({ url, name });

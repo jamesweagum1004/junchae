@@ -8,6 +8,7 @@ import SearchBar from '../components/SearchBar';
 import AdsGrid from '../components/AdsGrid';
 import CategoryGrid from '../components/CategoryGrid';
 import AIBridgeOverlay from '../components/AIBridgeOverlay';
+import { categoryPath } from '../lib/categorySlug';
 import { getSiteStatusMeta } from '../lib/siteStatus';
 
 export default function MainPage() {
@@ -101,7 +102,7 @@ export default function MainPage() {
               {categories.map((category) => (
                 <button
                   key={category.id}
-                  onClick={() => navigate(`/category/${encodeURIComponent(category.id)}`)}
+                  onClick={() => navigate(categoryPath(category))}
                   className={`flex-shrink-0 min-h-11 rounded-full px-4 text-sm font-bold transition-all active:scale-95 ${
                     isSecure
                       ? 'bg-white/[0.05] text-slate-100 border border-white/[0.08] hover:border-neon-orange/40 hover:text-neon-orange'

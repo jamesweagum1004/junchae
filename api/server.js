@@ -118,6 +118,7 @@ const siteColumns = [
 const categoryColumns = [
   'id',
   'name',
+  'slug',
   'mode',
   'sort_order',
   'seo_title',
@@ -398,6 +399,110 @@ function slugify(value) {
     .slice(0, 255) || 'site';
 }
 
+const categorySlugMap = new Map([
+  ['포털', 'portal'],
+  ['커뮤니티', 'community'],
+  ['웹툰', 'webtoon'],
+  ['뉴스', 'news'],
+  ['쇼핑', 'shopping'],
+  ['ott', 'ott'],
+  ['스포츠', 'sports'],
+  ['스포츠/카지노', 'sports-casino'],
+  ['스포츠 / 카지노', 'sports-casino'],
+  ['카지노', 'casino'],
+  ['토렌트', 'torrent'],
+  ['성인', 'adult'],
+  ['게임', 'game'],
+  ['금융', 'finance'],
+  ['생활', 'lifestyle'],
+  ['기타', 'etc'],
+]);
+
+function normalizeCategorySlug(value) {
+  const text = normalizeOptionalText(value);
+  if (!text) return '';
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[/&]+/g, '-')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 255);
+}
+
+function baseCategorySlug(name, id) {
+  const categoryName = normalizeOptionalText(name) || '';
+  const normalizedName = categoryName.replace(/\s+/g, ' ').trim();
+  const compactName = categoryName.replace(/\s+/g, '');
+  const mapped =
+    categorySlugMap.get(normalizedName) ||
+    categorySlugMap.get(compactName) ||
+    categorySlugMap.get(normalizedName.toLowerCase());
+  return normalizeCategorySlug(mapped || normalizedName) || `category-${id || 'new'}`;
+}
+
+function uniqueCategorySlug(name, id, takenSlugs) {
+  const base = baseCategorySlug(name, id);
+  let candidate = base;
+  let suffix = 2;
+  while (takenSlugs.has(candidate.toLowerCase())) {
+    candidate = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  takenSlugs.add(candidate.toLowerCase());
+  return candidate;
+}
+
+async function isCategorySlugTaken(slug, excludeId = null) {
+  if (!slug) return false;
+  const values = [slug];
+  let where = 'LOWER(slug) = LOWER(?)';
+  if (excludeId) {
+    where += ' AND id <> ?';
+    values.push(excludeId);
+  }
+  const [rows] = await db.execute(`SELECT COUNT(*) AS count FROM categories WHERE ${where}`, values);
+  return Number(rows[0]?.count) > 0;
+}
+
+async function getTakenCategorySlugs(excludeId = null) {
+  const values = [];
+  let where = 'slug IS NOT NULL AND slug <> ""';
+  if (excludeId) {
+    where += ' AND id <> ?';
+    values.push(excludeId);
+  }
+  const [rows] = await db.execute(`SELECT slug FROM categories WHERE ${where}`, values);
+  return new Set(
+    rows
+      .map((row) => normalizeCategorySlug(row.slug))
+      .filter(Boolean)
+      .map((slug) => slug.toLowerCase())
+  );
+}
+
+async function ensureCategorySlugs() {
+  const [rows] = await db.execute('SELECT id, name, slug FROM categories ORDER BY id ASC');
+  const taken = new Set();
+
+  for (const row of rows) {
+    const currentSlug = normalizeCategorySlug(row.slug);
+    const currentKey = currentSlug.toLowerCase();
+    const slug = currentSlug && !taken.has(currentKey)
+      ? currentSlug
+      : uniqueCategorySlug(row.name, row.id, taken);
+
+    if (currentSlug && !taken.has(currentKey)) {
+      taken.add(currentKey);
+    }
+
+    if (slug !== row.slug) {
+      await db.execute('UPDATE categories SET slug = ? WHERE id = ?', [slug, row.id]);
+    }
+  }
+}
+
 function maskSecret(value) {
   const text = normalizeOptionalText(value);
   if (!text) return '';
@@ -468,6 +573,7 @@ function pickEditableSiteUpdates(body) {
 function normalizeCategoryInput(body) {
   const category = {
     name: normalizeRequiredText(body.name),
+    slug: normalizeCategorySlug(body.slug),
     mode: normalizeMode(body.mode),
     sort_order: normalizeSortOrder(body.sort_order),
   };
@@ -482,6 +588,9 @@ function pickEditableCategoryUpdates(body) {
 
   if (Object.prototype.hasOwnProperty.call(body || {}, 'name')) {
     updates.name = normalizeRequiredText(body.name);
+  }
+  if (Object.prototype.hasOwnProperty.call(body || {}, 'slug')) {
+    updates.slug = normalizeCategorySlug(body.slug);
   }
   if (Object.prototype.hasOwnProperty.call(body || {}, 'mode')) {
     updates.mode = normalizeMode(body.mode);
@@ -612,6 +721,7 @@ async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS categories (
       id INT AUTO_INCREMENT PRIMARY KEY,
       name VARCHAR(100) NOT NULL,
+      slug VARCHAR(255) NULL,
       mode VARCHAR(50) NOT NULL DEFAULT 'normal',
       sort_order INT NOT NULL DEFAULT 0,
       created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -620,6 +730,7 @@ async function initializeDatabase() {
     )
   `);
 
+  await ensureColumn('categories', 'slug', 'VARCHAR(255) NULL', 'name');
   await ensureColumn('categories', 'seo_title', 'VARCHAR(255) NULL', 'sort_order');
   await ensureColumn('categories', 'seo_description', 'TEXT NULL', 'seo_title');
   await ensureColumn('categories', 'seo_keywords', 'TEXT NULL', 'seo_description');
@@ -709,6 +820,8 @@ async function initializeDatabase() {
     FROM sites
     WHERE category IS NOT NULL AND category <> ''
   `);
+
+  await ensureCategorySlugs();
 }
 
 app.get('/api/health', (req, res) => {
@@ -1255,12 +1368,12 @@ async function generateSitemapXml(settings) {
     if (modes.length > 0) {
       const placeholders = modes.map(() => '?').join(', ');
       const [categories] = await db.execute(
-        `SELECT id, name, mode, updated_at FROM categories WHERE mode IN (${placeholders}) ORDER BY mode ASC, sort_order ASC, id ASC`,
+        `SELECT id, name, slug, mode, updated_at FROM categories WHERE mode IN (${placeholders}) ORDER BY mode ASC, sort_order ASC, id ASC`,
         modes
       );
 
       categories.forEach((category) => {
-        const slug = encodeURIComponent(String(category.id || category.name));
+        const slug = encodeURIComponent(normalizeCategorySlug(category.slug) || baseCategorySlug(category.name, category.id));
         const loc = absoluteUrl(normalized.sitemap_base_url, `/category/${slug}`);
         entries.set(loc, sitemapUrlEntry(loc, formatDateOnly(category.updated_at), 'daily', '0.8'));
       });
@@ -2049,12 +2162,21 @@ app.post('/api/categories', requireAdminToken, asyncRoute(async (req, res) => {
   }
 
   try {
+    if (category.slug && await isCategorySlugTaken(category.slug)) {
+      return jsonError(res, 400, 'DUPLICATE_CATEGORY_SLUG', 'Category slug already exists.');
+    }
+    if (!category.slug) {
+      const taken = await getTakenCategorySlugs();
+      category.slug = uniqueCategorySlug(category.name, null, taken);
+    }
+
     const [result] = await db.execute(
       `INSERT INTO categories
-       (name, mode, sort_order, seo_title, seo_description, seo_keywords, seo_intro, seo_faq, seo_updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (name, slug, mode, sort_order, seo_title, seo_description, seo_keywords, seo_intro, seo_faq, seo_updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         category.name,
+        category.slug,
         category.mode,
         category.sort_order,
         category.seo_title,
@@ -2125,6 +2247,19 @@ async function saveCategoryUpdates(req, res) {
 
   if (Object.prototype.hasOwnProperty.call(updates, 'name') && !updates.name) {
     return jsonError(res, 400, 'VALIDATION_ERROR', 'name cannot be empty.');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(updates, 'slug')) {
+    if (!updates.slug) {
+      const taken = await getTakenCategorySlugs(id);
+      updates.slug = uniqueCategorySlug(updates.name || existing.name, id, taken);
+    }
+    if (await isCategorySlugTaken(updates.slug, id)) {
+      return jsonError(res, 400, 'DUPLICATE_CATEGORY_SLUG', 'Category slug already exists.');
+    }
+  } else if (!normalizeCategorySlug(existing.slug)) {
+    const taken = await getTakenCategorySlugs(id);
+    updates.slug = uniqueCategorySlug(updates.name || existing.name, id, taken);
   }
 
   const entries = Object.entries(updates);

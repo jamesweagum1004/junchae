@@ -14,6 +14,7 @@ import {
 } from '../data/categories';
 import { useTheme } from './ThemeContext';
 import { adminAuthHeaders, isWriteRequest } from '../lib/adminApi';
+import { slugifyCategoryName } from '../lib/categorySlug';
 import { normalizeSiteStatus } from '../lib/siteStatus';
 
 export type MobileColumns = 1 | 2;
@@ -139,6 +140,7 @@ const apiRequest = async (path: string, init?: RequestInit) => {
 const mapCategory = (row: ApiRow, fallbackIndex: number): Category => ({
   id: String(Number(row.id) || toStringValue(row.id, `category-${fallbackIndex + 1}`)),
   name: toStringValue(row.name, `카테고리 ${fallbackIndex + 1}`),
+  slug: toStringValue(row.slug) || slugifyCategoryName(toStringValue(row.name), row.id as string | number | null),
   icon: 'FolderOpen',
   color: modeLabelColor(modeKey(row.mode)),
   sortOrder: Number(row.sort_order ?? row.sortOrder) || 0,
