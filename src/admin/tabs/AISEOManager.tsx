@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Bot, CheckCircle, Search, Wand2 } from 'lucide-react';
+import { Bot, CheckCircle, Search, Upload, Wand2, X } from 'lucide-react';
 import ModeSubTabs from '../ModeSubTabs';
 import { useData } from '../../context/DataContext';
 import { apiJson, apiMode, loadSettings, saveSettings, type AdminMode } from '../../lib/adminApi';
+import { uploadSitePreviewImage } from '../../lib/adminUploads';
 import { getSiteSlug } from '../../lib/siteSlug';
 import type { Category, Site } from '../../data/categories';
 
@@ -324,6 +325,8 @@ export default function AISEOManager() {
   const [aiText, setAiText] = useState('');
   const [loadingAi, setLoadingAi] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [previewUploading, setPreviewUploading] = useState(false);
+  const [previewUploadError, setPreviewUploadError] = useState('');
 
   const sites = useMemo<SeoSite[]>(
     () =>
@@ -360,6 +363,7 @@ export default function AISEOManager() {
     setSelectedId(siteId);
     setAiPreview(null);
     setAiText('');
+    setPreviewUploadError('');
     setDraft(siteToDraft(site));
   };
 
@@ -371,7 +375,26 @@ export default function AISEOManager() {
     }
     setSelectedId(null);
     setDraft(emptyDraft);
+    setPreviewUploadError('');
   }, [filteredSites, selectedId, sites]);
+
+  const uploadPreview = async (file: File | undefined) => {
+    if (!file) return;
+    setPreviewUploading(true);
+    setPreviewUploadError('');
+    try {
+      const imageUrl = await uploadSitePreviewImage(file);
+      setDraft((current) => ({ ...current, preview_image: imageUrl }));
+    } catch (err) {
+      const message = err instanceof Error && err.message
+        ? err.message
+        : '미리보기 이미지 업로드에 실패했습니다.';
+      setPreviewUploadError(message);
+      console.error('미리보기 이미지 업로드 실패', err);
+    } finally {
+      setPreviewUploading(false);
+    }
+  };
 
   const saveSeo = async (payload: SeoDraft = draft) => {
     if (!selected) return;
@@ -528,25 +551,91 @@ export default function AISEOManager() {
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {siteTextFields.map((field) => (
-                <label key={field.key} className={field.multiline ? 'sm:col-span-2 space-y-1' : 'space-y-1'}>
-                  <span className="text-[11px] text-slate-500">{field.label}</span>
-                  {field.multiline ? (
-                    <textarea
-                      value={draft[field.key]}
-                      onChange={(e) => setDraft((current) => ({ ...current, [field.key]: e.target.value }))}
-                      rows={field.key === 'seo_description' ? 3 : 2}
-                      className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange resize-none"
-                    />
-                  ) : (
-                    <input
-                      value={draft[field.key]}
-                      onChange={(e) => setDraft((current) => ({ ...current, [field.key]: e.target.value }))}
-                      className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
-                    />
-                  )}
-                </label>
-              ))}
+              {siteTextFields.map((field) => {
+                if (field.key === 'preview_image') {
+                  return (
+                    <div key={field.key} className="sm:col-span-2 space-y-2 rounded-xl border border-obsidian-500 bg-obsidian-700/40 p-3">
+                      <div>
+                        <span className="text-[11px] font-bold text-slate-400">사이트 메인 이미지 / 스크린샷</span>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          선택 사항입니다. 사이트 상세 pSEO 페이지에 표시됩니다. 없으면 이미지 섹션은 숨겨집니다.
+                        </p>
+                      </div>
+                      <input
+                        value={draft.preview_image}
+                        onChange={(e) => {
+                          setPreviewUploadError('');
+                          setDraft((current) => ({ ...current, preview_image: e.target.value }));
+                        }}
+                        placeholder="/uploads/previews/site.png"
+                        className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange font-mono"
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <label className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg border border-obsidian-500 text-slate-300 bg-obsidian-700 hover:border-neon-orange/50 cursor-pointer">
+                          <Upload size={13} />
+                          {previewUploading ? '업로드 중...' : '이미지 업로드'}
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png,image/webp,image/gif"
+                            className="hidden"
+                            disabled={previewUploading}
+                            onChange={(e) => {
+                              void uploadPreview(e.target.files?.[0]);
+                              e.target.value = '';
+                            }}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPreviewUploadError('');
+                            setDraft((current) => ({ ...current, preview_image: '' }));
+                          }}
+                          disabled={!draft.preview_image}
+                          className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg border border-obsidian-500 text-slate-300 bg-obsidian-700 hover:border-red-400/50 disabled:opacity-50"
+                        >
+                          <X size={13} />
+                          이미지 제거
+                        </button>
+                      </div>
+                      {previewUploadError && (
+                        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                          {previewUploadError}
+                        </div>
+                      )}
+                      {draft.preview_image && (
+                        <div className="overflow-hidden rounded-xl border border-obsidian-500 bg-white">
+                          <img
+                            src={draft.preview_image}
+                            alt={`${selected.name} 미리보기`}
+                            className="w-full max-h-56 object-cover object-top"
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+
+                return (
+                  <label key={field.key} className={field.multiline ? 'sm:col-span-2 space-y-1' : 'space-y-1'}>
+                    <span className="text-[11px] text-slate-500">{field.label}</span>
+                    {field.multiline ? (
+                      <textarea
+                        value={draft[field.key]}
+                        onChange={(e) => setDraft((current) => ({ ...current, [field.key]: e.target.value }))}
+                        rows={field.key === 'seo_description' ? 3 : 2}
+                        className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange resize-none"
+                      />
+                    ) : (
+                      <input
+                        value={draft[field.key]}
+                        onChange={(e) => setDraft((current) => ({ ...current, [field.key]: e.target.value }))}
+                        className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
+                      />
+                    )}
+                  </label>
+                );
+              })}
             </div>
 
             <label className="space-y-1 block">

@@ -20,6 +20,7 @@ import { useData } from '../../context/DataContext';
 import { Site, SiteStatus } from '../../data/categories';
 import ModeSubTabs from '../ModeSubTabs';
 import { adminAuthHeaders } from '../../lib/adminApi';
+import { uploadSitePreviewImage } from '../../lib/adminUploads';
 import { getSiteStatusMeta, normalizeSiteStatus } from '../../lib/siteStatus';
 import { sitePath, slugifySiteName } from '../../lib/siteSlug';
 
@@ -134,17 +135,6 @@ export default function SiteManager() {
     const body = new FormData();
     body.append('logo', file);
     const res = await fetch('/api/uploads/logo', {
-      method: 'POST',
-      headers: adminAuthHeaders(),
-      body,
-    });
-    return parseUploadResponse(res);
-  };
-
-  const uploadPreviewFile = async (file: File) => {
-    const body = new FormData();
-    body.append('image', file);
-    const res = await fetch('/api/uploads/site-preview', {
       method: 'POST',
       headers: adminAuthHeaders(),
       body,
@@ -365,7 +355,7 @@ export default function SiteManager() {
     if (!file) return;
     setPreviewUploadingId(site.id);
     try {
-      const imagePath = await uploadPreviewFile(file);
+      const imagePath = await uploadSitePreviewImage(file);
       updateDetailDraft(site, 'preview_image', imagePath);
       await updateSiteInMode(activeMode, site.id, { preview_image: imagePath });
       setDetailNotices((current) => ({
@@ -904,20 +894,32 @@ export default function SiteManager() {
                               className="w-full px-3 py-2 text-xs bg-obsidian-700 border border-obsidian-500 rounded-lg text-white placeholder-slate-600 focus:outline-none focus:border-neon-orange font-mono"
                             />
                           </label>
-                          <p className="text-[11px] text-slate-500">선택 사항입니다. 없으면 로고만 표시됩니다.</p>
-                          <label className="inline-flex items-center justify-center gap-1.5 w-full px-3 py-2 text-xs font-bold rounded-lg border border-obsidian-500 text-slate-300 bg-obsidian-700 hover:border-neon-orange/50 cursor-pointer">
-                            <Upload size={13} />
-                            {previewUploadingId === site.id ? '업로드 중...' : '이미지 업로드'}
-                            <input
-                              type="file"
-                              accept="image/jpeg,image/png,image/webp,image/gif"
-                              className="hidden"
-                              onChange={(e) => {
-                                void savePreviewImage(site, e.target.files?.[0]);
-                                e.target.value = '';
-                              }}
-                            />
-                          </label>
+                          <p className="text-[11px] text-slate-500">
+                            선택 사항입니다. 사이트 상세 pSEO 페이지에 표시됩니다. 없으면 이미지 섹션은 숨겨집니다.
+                          </p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <label className="inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg border border-obsidian-500 text-slate-300 bg-obsidian-700 hover:border-neon-orange/50 cursor-pointer">
+                              <Upload size={13} />
+                              {previewUploadingId === site.id ? '업로드 중...' : '이미지 업로드'}
+                              <input
+                                type="file"
+                                accept="image/jpeg,image/png,image/webp,image/gif"
+                                className="hidden"
+                                onChange={(e) => {
+                                  void savePreviewImage(site, e.target.files?.[0]);
+                                  e.target.value = '';
+                                }}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => updateDetailDraft(site, 'preview_image', '')}
+                              disabled={!detailDraft.preview_image}
+                              className="px-3 py-2 text-xs font-bold rounded-lg border border-obsidian-500 text-slate-300 bg-obsidian-700 hover:border-red-400/50 disabled:opacity-50"
+                            >
+                              이미지 제거
+                            </button>
+                          </div>
                           {detailDraft.preview_image && (
                             <div className="overflow-hidden rounded-xl border border-obsidian-500 bg-white">
                               <img src={detailDraft.preview_image} alt={`${site.name} 미리보기`} className="w-full h-36 object-cover object-top" />
