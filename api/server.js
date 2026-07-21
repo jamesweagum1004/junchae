@@ -710,6 +710,22 @@ function normalizeSeoLongTextValue(value) {
   return normalizeOptionalText(value);
 }
 
+function normalizeGeneratedSeoText(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item && typeof item === 'object') return item.title || item.text || item.keyword || item.name || '';
+        return '';
+      })
+      .map((item) => String(item).trim())
+      .filter(Boolean)
+      .join(', ');
+  }
+  if (value && typeof value === 'object') return JSON.stringify(value);
+  return normalizeOptionalText(value);
+}
+
 function pickEditableSiteUpdates(body) {
   const updates = {};
 
@@ -2506,7 +2522,8 @@ async function generateSiteSeoData({ siteId, mode, options = {} }) {
     throw err;
   }
 
-  const { promptTemplate } = await getDeepSeekConfig(mode);
+  const effectiveMode = mode ? normalizeMode(mode) : normalizeMode(site.mode);
+  const { promptTemplate } = await getDeepSeekConfig(effectiveMode);
   const prompt = `
 ${promptTemplate}
 
@@ -2534,18 +2551,70 @@ seo_faq는 3~5개의 질문/답변으로 작성하세요.
 `;
 
   const text = await callDeepSeek({
-    mode,
+    mode: effectiveMode,
     messages: [
       { role: 'system', content: 'You are a Korean SEO expert. Return valid JSON only.' },
       { role: 'user', content: prompt },
     ],
   });
   const parsed = parseJsonFromText(text);
-  return { text, json: parsed };
+  return { text, json: parsed, mode: effectiveMode };
+}
+
+async function buildGeneratedSeoUpdates(site, generatedSeo) {
+  const seo = generatedSeo && typeof generatedSeo === 'object' ? generatedSeo : {};
+  const slugCandidate =
+    normalizeSiteSlug(seo.seo_slug) ||
+    normalizeSiteSlug(site.seo_slug) ||
+    uniqueSiteSlug(site.name, site.id, await getTakenSiteSlugs(site.id));
+  let seoSlug = slugCandidate;
+  if (await isSiteSlugTaken(seoSlug, site.id)) {
+    const taken = await getTakenSiteSlugs(site.id);
+    seoSlug = uniqueSiteSlug(seoSlug, site.id, taken);
+  }
+
+  return {
+    seo_title: normalizeGeneratedSeoText(seo.seo_title) || site.seo_title || `${site.name} 바로가기 | 전체닷컴`,
+    seo_description: normalizeGeneratedSeoText(seo.seo_description) || site.seo_description || site.description || '',
+    seo_keywords: normalizeGeneratedSeoText(seo.seo_keywords) || site.seo_keywords || site.name,
+    seo_slug: seoSlug,
+    seo_h1: normalizeGeneratedSeoText(seo.seo_h1) || site.seo_h1 || site.name,
+    seo_canonical: `https://junchae.com/site/${seoSlug}`,
+    seo_og_title: normalizeGeneratedSeoText(seo.seo_og_title || seo.seo_title) || site.seo_og_title || site.name,
+    seo_og_description:
+      normalizeGeneratedSeoText(seo.seo_og_description || seo.seo_description) ||
+      site.seo_og_description ||
+      site.seo_description ||
+      site.description ||
+      '',
+    seo_og_image: normalizeGeneratedSeoText(seo.seo_og_image) || site.seo_og_image || site.preview_image || site.logo || '',
+    seo_intro: normalizeGeneratedSeoText(seo.seo_intro) || site.seo_intro || '',
+    seo_features: normalizeSeoLongTextValue(seo.seo_features) || site.seo_features || '',
+    seo_faq: normalizeSeoLongTextValue(seo.seo_faq) || site.seo_faq || '',
+    seo_score: normalizeSeoScore(seo.seo_score || site.seo_score || 0),
+    seo_updated_at: new Date(),
+  };
+}
+
+async function saveGeneratedSeo(siteId, generatedSeo) {
+  const site = await getSiteById(siteId);
+  if (!site) {
+    const err = new Error('Site not found.');
+    err.status = 404;
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
+  const updates = await buildGeneratedSeoUpdates(site, generatedSeo);
+  const entries = Object.entries(updates);
+  const setClause = entries.map(([column]) => `${column} = ?`).join(', ');
+  const values = entries.map(([, value]) => value);
+  values.push(siteId);
+  await db.execute(`UPDATE sites SET ${setClause} WHERE id = ?`, values);
+  return updates;
 }
 
 app.post('/api/deepseek/generate-seo', requireAdminToken, asyncRoute(async (req, res) => {
-  const mode = normalizeMode(req.body?.mode);
+  const mode = req.body?.mode;
   const siteId = parseId(req.body?.site_id);
 
   try {
@@ -2559,14 +2628,37 @@ app.post('/api/deepseek/generate-seo', requireAdminToken, asyncRoute(async (req,
 
 app.post('/api/admin/sites/:id/generate-seo', requireAdminToken, asyncRoute(async (req, res) => {
   const siteId = parseId(req.params.id);
-  const mode = normalizeMode(req.body?.mode);
+  const mode = req.body?.mode;
+  const shouldSave = req.body?.save === true || req.body?.save === 'true' || req.body?.save === 1 || req.body?.save === '1';
 
   try {
     const data = await generateSiteSeoData({ siteId, mode, options: req.body?.options || {} });
-    return res.json({ ok: true, data });
+    let seo = data.json && typeof data.json === 'object' ? data.json : null;
+    if (shouldSave) {
+      const savedSeo = await saveGeneratedSeo(siteId, seo);
+      seo = savedSeo;
+    }
+    return res.json({
+      ok: true,
+      saved: shouldSave,
+      site_id: siteId,
+      seo,
+      data: {
+        ...data,
+        json: seo,
+        saved: shouldSave,
+        site_id: siteId,
+      },
+    });
   } catch (err) {
     console.error('Admin site SEO generation error:', { code: err.code, status: err.status, message: err.message, body: err.body });
-    return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', err.message);
+    return res.status(err.status || 500).json({
+      ok: false,
+      saved: false,
+      site_id: siteId,
+      error: err.code || 'DEEPSEEK_ERROR',
+      message: err.message,
+    });
   }
 }));
 
