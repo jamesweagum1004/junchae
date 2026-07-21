@@ -161,6 +161,31 @@ const adColumns = [
   'updated_at',
 ];
 
+const linkCandidateColumns = [
+  'id',
+  'source_name',
+  'source_url',
+  'mode',
+  'category_slug',
+  'category_name',
+  'site_name',
+  'site_url',
+  'domain',
+  'status_global',
+  'status_kr',
+  'kr_warning_detected',
+  'logo_candidate_url',
+  'logo_final_url',
+  'preview_image_url',
+  'approved',
+  'rejected',
+  'imported',
+  'site_id',
+  'memo',
+  'created_at',
+  'updated_at',
+];
+
 const seoColumns = [
   'seo_title',
   'seo_description',
@@ -383,6 +408,32 @@ function normalizeDate(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value !== 'string') return null;
   return /^\d{4}-\d{2}-\d{2}$/.test(value.trim()) ? value.trim() : null;
+}
+
+function parseHttpUrl(value) {
+  const text = normalizeRequiredText(value);
+  if (!text) return null;
+  try {
+    const parsed = new URL(text);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+    parsed.hash = '';
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeHttpUrl(value) {
+  const parsed = parseHttpUrl(value);
+  if (!parsed) return '';
+  const normalized = parsed.toString();
+  return normalized.endsWith('/') && !parsed.search ? normalized.slice(0, -1) : normalized;
+}
+
+function domainFromUrl(value) {
+  const parsed = parseHttpUrl(value);
+  if (!parsed) return '';
+  return parsed.hostname.toLowerCase().replace(/^www\./, '');
 }
 
 function normalizeSafeKey(value, fallback = '') {
@@ -788,6 +839,119 @@ function pickEditableAdUpdates(body) {
   return updates;
 }
 
+function normalizeCandidateInput(body, partial = false) {
+  const siteUrl = Object.prototype.hasOwnProperty.call(body || {}, 'site_url')
+    ? normalizeHttpUrl(body.site_url)
+    : '';
+  const sourceUrl = Object.prototype.hasOwnProperty.call(body || {}, 'source_url')
+    ? normalizeHttpUrl(body.source_url)
+    : undefined;
+  const logoCandidateUrl = Object.prototype.hasOwnProperty.call(body || {}, 'logo_candidate_url')
+    ? normalizeHttpUrl(body.logo_candidate_url)
+    : undefined;
+  const logoFinalUrl = Object.prototype.hasOwnProperty.call(body || {}, 'logo_final_url')
+    ? normalizeHttpUrl(body.logo_final_url)
+    : undefined;
+  const previewImageUrl = Object.prototype.hasOwnProperty.call(body || {}, 'preview_image_url')
+    ? normalizeHttpUrl(body.preview_image_url)
+    : undefined;
+  const siteName = normalizeRequiredText(body?.site_name ?? body?.name);
+
+  if (!partial && !siteUrl) {
+    const err = new Error('site_url must be a valid http or https URL.');
+    err.code = 'INVALID_SITE_URL';
+    throw err;
+  }
+  if (partial && Object.prototype.hasOwnProperty.call(body || {}, 'site_url') && !siteUrl) {
+    const err = new Error('site_url must be a valid http or https URL.');
+    err.code = 'INVALID_SITE_URL';
+    throw err;
+  }
+  if (!partial && !siteName) {
+    const err = new Error('site_name is required.');
+    err.code = 'VALIDATION_ERROR';
+    throw err;
+  }
+
+  const normalized = {};
+  const assignText = (column, value) => {
+    if (!partial || Object.prototype.hasOwnProperty.call(body || {}, column)) {
+      normalized[column] = normalizeOptionalText(value);
+    }
+  };
+  assignText('source_name', body?.source_name);
+  if (sourceUrl !== undefined) normalized.source_url = sourceUrl;
+  if (!partial || Object.prototype.hasOwnProperty.call(body || {}, 'mode')) normalized.mode = normalizeMode(body?.mode);
+  assignText('category_slug', body?.category_slug);
+  assignText('category_name', body?.category_name);
+  if (!partial || Object.prototype.hasOwnProperty.call(body || {}, 'site_name') || Object.prototype.hasOwnProperty.call(body || {}, 'name')) {
+    normalized.site_name = siteName;
+  }
+  if (siteUrl) {
+    normalized.site_url = siteUrl;
+    normalized.domain = domainFromUrl(siteUrl);
+  }
+  assignText('status_global', body?.status_global);
+  assignText('status_kr', body?.status_kr);
+  if (!partial || Object.prototype.hasOwnProperty.call(body || {}, 'kr_warning_detected')) {
+    normalized.kr_warning_detected = normalizeBooleanInt(body?.kr_warning_detected, 0);
+  }
+  if (logoCandidateUrl !== undefined) normalized.logo_candidate_url = logoCandidateUrl;
+  if (logoFinalUrl !== undefined) normalized.logo_final_url = logoFinalUrl;
+  if (previewImageUrl !== undefined) normalized.preview_image_url = previewImageUrl;
+  if (!partial || Object.prototype.hasOwnProperty.call(body || {}, 'approved')) {
+    normalized.approved = normalizeBooleanInt(body?.approved, 0);
+  }
+  if (!partial || Object.prototype.hasOwnProperty.call(body || {}, 'rejected')) {
+    normalized.rejected = normalizeBooleanInt(body?.rejected, 0);
+  }
+  if (!partial || Object.prototype.hasOwnProperty.call(body || {}, 'imported')) {
+    normalized.imported = normalizeBooleanInt(body?.imported, 0);
+  }
+  if (!partial || Object.prototype.hasOwnProperty.call(body || {}, 'site_id')) {
+    normalized.site_id = parseId(body?.site_id);
+  }
+  assignText('memo', body?.memo);
+
+  return normalized;
+}
+
+async function getUrlDuplicateInfo(rawUrl, excludeCandidateId = null) {
+  const normalizedUrl = normalizeHttpUrl(rawUrl);
+  if (!normalizedUrl) {
+    const err = new Error('url must be a valid http or https URL.');
+    err.code = 'INVALID_URL';
+    throw err;
+  }
+  const domain = domainFromUrl(normalizedUrl);
+  const [sites] = await db.execute(
+    `SELECT id, name, url, mode, is_hidden FROM sites ORDER BY id ASC`
+  );
+  const duplicateSites = sites.filter((site) => {
+    const siteUrl = normalizeHttpUrl(site.url);
+    return siteUrl === normalizedUrl || domainFromUrl(site.url) === domain;
+  });
+
+  const candidateValues = [normalizedUrl, domain];
+  let candidateWhere = '(site_url = ? OR domain = ?)';
+  if (excludeCandidateId) {
+    candidateWhere += ' AND id <> ?';
+    candidateValues.push(excludeCandidateId);
+  }
+  const [candidates] = await db.execute(
+    `SELECT id, site_name, site_url, domain, imported, rejected FROM link_candidates WHERE ${candidateWhere} ORDER BY id ASC`,
+    candidateValues
+  );
+
+  return {
+    url: normalizedUrl,
+    domain,
+    duplicate: duplicateSites.length > 0 || candidates.length > 0,
+    sites: duplicateSites,
+    candidates,
+  };
+}
+
 async function getSiteById(id) {
   const [rows] = await db.execute(
     `SELECT ${siteColumns.join(', ')} FROM sites WHERE id = ? LIMIT 1`,
@@ -932,6 +1096,40 @@ async function initializeDatabase() {
       INDEX idx_device_type (device_type),
       INDEX idx_visitor_type (visitor_type),
       INDEX idx_bot_name (bot_name)
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS link_candidates (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      source_name VARCHAR(255) NULL,
+      source_url VARCHAR(500) NULL,
+      mode VARCHAR(50) NOT NULL DEFAULT 'normal',
+      category_slug VARCHAR(255) NULL,
+      category_name VARCHAR(255) NULL,
+      site_name VARCHAR(255) NOT NULL,
+      site_url VARCHAR(500) NOT NULL,
+      domain VARCHAR(255) NOT NULL,
+      status_global VARCHAR(100) NULL,
+      status_kr VARCHAR(100) NULL,
+      kr_warning_detected TINYINT(1) NOT NULL DEFAULT 0,
+      logo_candidate_url VARCHAR(500) NULL,
+      logo_final_url VARCHAR(500) NULL,
+      preview_image_url VARCHAR(500) NULL,
+      approved TINYINT(1) NOT NULL DEFAULT 0,
+      rejected TINYINT(1) NOT NULL DEFAULT 0,
+      imported TINYINT(1) NOT NULL DEFAULT 0,
+      site_id INT NULL,
+      memo TEXT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      INDEX idx_domain (domain),
+      INDEX idx_site_url (site_url),
+      INDEX idx_approved (approved),
+      INDEX idx_imported (imported),
+      INDEX idx_mode (mode),
+      INDEX idx_category_slug (category_slug),
+      INDEX idx_created_at (created_at)
     )
   `);
 
@@ -1997,6 +2195,188 @@ app.post('/api/settings', requireAdminToken, asyncRoute(async (req, res) => {
   return res.json({ ok: true, data: settings });
 }));
 
+app.get('/api/admin/sites/check-duplicate', requireAdminToken, asyncRoute(async (req, res) => {
+  try {
+    const data = await getUrlDuplicateInfo(req.query.url);
+    return res.json({ ok: true, data });
+  } catch (err) {
+    return jsonError(res, 400, err.code || 'INVALID_URL', err.message);
+  }
+}));
+
+app.post('/api/admin/link-candidates/bulk', requireAdminToken, asyncRoute(async (req, res) => {
+  const items = Array.isArray(req.body)
+    ? req.body
+    : Array.isArray(req.body?.candidates)
+      ? req.body.candidates
+      : Array.isArray(req.body?.rows)
+        ? req.body.rows
+        : Array.isArray(req.body?.items)
+          ? req.body.items
+          : [];
+
+  if (items.length === 0) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'candidates are required.');
+  }
+
+  const created = [];
+  const skipped = [];
+  const insertColumns = linkCandidateColumns.filter((column) => !['id', 'created_at', 'updated_at'].includes(column));
+
+  for (const [index, item] of items.entries()) {
+    try {
+      const candidate = normalizeCandidateInput(item || {});
+      const duplicate = await getUrlDuplicateInfo(candidate.site_url);
+      if (duplicate.duplicate) {
+        skipped.push({ index, site_url: candidate.site_url, domain: candidate.domain, reason: 'DUPLICATE_URL_OR_DOMAIN', duplicate });
+        continue;
+      }
+
+      const values = insertColumns.map((column) => candidate[column] ?? null);
+      const placeholders = insertColumns.map(() => '?').join(', ');
+      const [result] = await db.execute(
+        `INSERT INTO link_candidates (${insertColumns.join(', ')}) VALUES (${placeholders})`,
+        values
+      );
+      const [rows] = await db.execute(
+        `SELECT ${linkCandidateColumns.join(', ')} FROM link_candidates WHERE id = ? LIMIT 1`,
+        [result.insertId]
+      );
+      created.push(rows[0]);
+    } catch (err) {
+      skipped.push({ index, reason: err.code || 'INVALID_CANDIDATE', message: err.message });
+    }
+  }
+
+  return res.status(201).json({ ok: true, data: { created, skipped, created_count: created.length, skipped_count: skipped.length } });
+}));
+
+app.get('/api/admin/link-candidates', requireAdminToken, asyncRoute(async (req, res) => {
+  const clauses = [];
+  const values = [];
+  if (req.query.mode) {
+    clauses.push('mode = ?');
+    values.push(normalizeMode(req.query.mode));
+  }
+  ['approved', 'rejected', 'imported'].forEach((column) => {
+    if (!Object.prototype.hasOwnProperty.call(req.query, column)) return;
+    clauses.push(`${column} = ?`);
+    values.push(normalizeBooleanInt(req.query[column], 0));
+  });
+  if (req.query.domain) {
+    clauses.push('domain = ?');
+    values.push(String(req.query.domain).toLowerCase().replace(/^www\./, ''));
+  }
+  const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const [rows] = await db.execute(
+    `SELECT ${linkCandidateColumns.join(', ')} FROM link_candidates ${where} ORDER BY created_at DESC, id DESC LIMIT ${limit}`,
+    values
+  );
+  return res.json({ ok: true, data: rows });
+}));
+
+app.patch('/api/admin/link-candidates/:id', requireAdminToken, asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  let updates;
+  try {
+    updates = normalizeCandidateInput(req.body || {}, true);
+  } catch (err) {
+    return jsonError(res, 400, err.code || 'INVALID_CANDIDATE', err.message);
+  }
+
+  if (updates.site_url) {
+    const duplicate = await getUrlDuplicateInfo(updates.site_url, id);
+    if (duplicate.duplicate) {
+      return res.status(400).json({ ok: false, error: 'DUPLICATE_URL_OR_DOMAIN', message: 'site_url or domain already exists.', data: duplicate });
+    }
+  }
+
+  const entries = Object.entries(updates).filter(([column]) => linkCandidateColumns.includes(column));
+  if (entries.length === 0) {
+    return jsonError(res, 400, 'VALIDATION_ERROR', 'No editable fields were provided.');
+  }
+
+  const setClause = entries.map(([column]) => `${column} = ?`).join(', ');
+  const values = entries.map(([, value]) => value);
+  values.push(id);
+  const [result] = await db.execute(`UPDATE link_candidates SET ${setClause} WHERE id = ?`, values);
+  if (result.affectedRows === 0) return jsonError(res, 404, 'NOT_FOUND', 'Candidate not found.');
+
+  const [rows] = await db.execute(`SELECT ${linkCandidateColumns.join(', ')} FROM link_candidates WHERE id = ? LIMIT 1`, [id]);
+  return res.json({ ok: true, data: rows[0] });
+}));
+
+app.post('/api/admin/link-candidates/:id/import', requireAdminToken, asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const [rows] = await db.execute(`SELECT ${linkCandidateColumns.join(', ')} FROM link_candidates WHERE id = ? LIMIT 1`, [id]);
+  const candidate = rows[0];
+  if (!candidate) return jsonError(res, 404, 'NOT_FOUND', 'Candidate not found.');
+  if (candidate.imported) return jsonError(res, 400, 'ALREADY_IMPORTED', 'Candidate has already been imported.');
+  if (candidate.rejected) return jsonError(res, 400, 'REJECTED_CANDIDATE', 'Rejected candidate cannot be imported.');
+  if (!candidate.approved && req.body?.force !== true) {
+    return jsonError(res, 400, 'NOT_APPROVED', 'Candidate must be approved before import.');
+  }
+
+  const siteUrl = normalizeHttpUrl(candidate.site_url);
+  if (!siteUrl) return jsonError(res, 400, 'INVALID_SITE_URL', 'Candidate site_url is invalid.');
+  const duplicate = await getUrlDuplicateInfo(siteUrl, id);
+  if (duplicate.sites.length > 0) {
+    return res.status(400).json({ ok: false, error: 'DUPLICATE_URL_OR_DOMAIN', message: 'Site already exists.', data: duplicate });
+  }
+
+  const mode = normalizeMode(candidate.mode);
+  let categoryName = normalizeOptionalText(candidate.category_name);
+  if (candidate.category_slug) {
+    const [categoryRows] = await db.execute(
+      'SELECT name FROM categories WHERE mode = ? AND slug = ? LIMIT 1',
+      [mode, candidate.category_slug]
+    );
+    categoryName = categoryRows[0]?.name || categoryName;
+  }
+  if (!categoryName) return jsonError(res, 400, 'CATEGORY_REQUIRED', 'category_slug or category_name is required.');
+
+  const [[orderRow]] = await db.execute(
+    'SELECT COALESCE(MAX(sort_order), -1) + 1 AS next_order FROM sites WHERE mode = ? AND category = ?',
+    [mode, categoryName]
+  );
+  const logo = normalizeOptionalText(candidate.logo_final_url || candidate.logo_candidate_url) || '/uploads/logos/default.png';
+  const [result] = await db.execute(
+    `INSERT INTO sites
+     (mode, name, url, category, description, logo, status, seo_slug, preview_image, is_hidden, is_featured, featured_order, sort_order)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      mode,
+      candidate.site_name,
+      siteUrl,
+      categoryName,
+      candidate.memo || '',
+      logo,
+      normalizeSiteStatus(candidate.status_kr || candidate.status_global || 'checking'),
+      null,
+      normalizeOptionalText(candidate.preview_image_url),
+      1,
+      0,
+      0,
+      Number(orderRow?.next_order) || 0,
+    ]
+  );
+  const taken = await getTakenSiteSlugs(result.insertId);
+  const generatedSlug = uniqueSiteSlug(candidate.site_name, result.insertId, taken);
+  await db.execute('UPDATE sites SET seo_slug = ? WHERE id = ?', [generatedSlug, result.insertId]);
+  await db.execute(
+    'UPDATE link_candidates SET imported = 1, site_id = ? WHERE id = ?',
+    [result.insertId, id]
+  );
+
+  const site = await getSiteById(result.insertId);
+  return res.status(201).json({ ok: true, data: { candidate_id: id, site } });
+}));
+
 app.get('/api/sites', asyncRoute(async (req, res) => {
   await ensureSiteSlugs();
   const values = [];
@@ -2110,16 +2490,23 @@ app.post('/api/deepseek/test', requireAdminToken, asyncRoute(async (req, res) =>
   }
 }));
 
-app.post('/api/deepseek/generate-seo', requireAdminToken, asyncRoute(async (req, res) => {
-  const mode = normalizeMode(req.body?.mode);
-  const siteId = parseId(req.body?.site_id);
-  if (!siteId) return jsonError(res, 400, 'INVALID_ID', 'site_id is required.');
+async function generateSiteSeoData({ siteId, mode, options = {} }) {
+  if (!siteId) {
+    const err = new Error('site_id is required.');
+    err.status = 400;
+    err.code = 'INVALID_ID';
+    throw err;
+  }
 
   const site = await getSiteById(siteId);
-  if (!site) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+  if (!site) {
+    const err = new Error('Site not found.');
+    err.status = 404;
+    err.code = 'NOT_FOUND';
+    throw err;
+  }
 
   const { promptTemplate } = await getDeepSeekConfig(mode);
-  const options = req.body?.options || {};
   const prompt = `
 ${promptTemplate}
 
@@ -2146,18 +2533,39 @@ seo_features는 3~6개의 주요 기능/특징으로 작성하세요.
 seo_faq는 3~5개의 질문/답변으로 작성하세요.
 `;
 
+  const text = await callDeepSeek({
+    mode,
+    messages: [
+      { role: 'system', content: 'You are a Korean SEO expert. Return valid JSON only.' },
+      { role: 'user', content: prompt },
+    ],
+  });
+  const parsed = parseJsonFromText(text);
+  return { text, json: parsed };
+}
+
+app.post('/api/deepseek/generate-seo', requireAdminToken, asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.body?.mode);
+  const siteId = parseId(req.body?.site_id);
+
   try {
-    const text = await callDeepSeek({
-      mode,
-      messages: [
-        { role: 'system', content: 'You are a Korean SEO expert. Return valid JSON only.' },
-        { role: 'user', content: prompt },
-      ],
-    });
-    const parsed = parseJsonFromText(text);
-    return res.json({ ok: true, data: { text, json: parsed } });
+    const data = await generateSiteSeoData({ siteId, mode, options: req.body?.options || {} });
+    return res.json({ ok: true, data });
   } catch (err) {
     console.error('DeepSeek SEO generation error:', { code: err.code, status: err.status, message: err.message, body: err.body });
+    return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', err.message);
+  }
+}));
+
+app.post('/api/admin/sites/:id/generate-seo', requireAdminToken, asyncRoute(async (req, res) => {
+  const siteId = parseId(req.params.id);
+  const mode = normalizeMode(req.body?.mode);
+
+  try {
+    const data = await generateSiteSeoData({ siteId, mode, options: req.body?.options || {} });
+    return res.json({ ok: true, data });
+  } catch (err) {
+    console.error('Admin site SEO generation error:', { code: err.code, status: err.status, message: err.message, body: err.body });
     return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', err.message);
   }
 }));
