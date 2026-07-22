@@ -44,6 +44,13 @@ export interface Site {
   featuredOrder?: number;
   sort_order?: number;
   sortOrder?: number;
+  last_checked_at?: string | null;
+  http_status?: number | null;
+  final_url?: string | null;
+  candidate_new_url?: string | null;
+  down_count?: number;
+  status_memo?: string | null;
+  check_status?: string | null;
 }
 
 export interface Category {

@@ -122,6 +122,13 @@ const siteColumns = [
   'is_featured',
   'featured_order',
   'sort_order',
+  'last_checked_at',
+  'http_status',
+  'final_url',
+  'candidate_new_url',
+  'down_count',
+  'status_memo',
+  'check_status',
   'created_at',
   'updated_at',
 ];
@@ -434,6 +441,205 @@ function domainFromUrl(value) {
   const parsed = parseHttpUrl(value);
   if (!parsed) return '';
   return parsed.hostname.toLowerCase().replace(/^www\./, '');
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clampInt(value, min, max, fallback) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(number)));
+}
+
+function randomDelayMs(min = 300, max = 800) {
+  return min + Math.floor(Math.random() * (max - min + 1));
+}
+
+function isCloudflareChallenge(status, text, headers) {
+  const server = String(headers?.get?.('server') || '').toLowerCase();
+  const body = String(text || '').toLowerCase();
+  return (
+    server.includes('cloudflare') &&
+    (
+      status === 403 ||
+      status === 503 ||
+      body.includes('cf-chl') ||
+      body.includes('cloudflare ray id') ||
+      body.includes('checking your browser') ||
+      body.includes('verify you are human') ||
+      body.includes('just a moment')
+    )
+  );
+}
+
+function isRestrictedContent(text, finalUrl) {
+  const body = String(text || '').toLowerCase();
+  const target = String(finalUrl || '').toLowerCase();
+  return (
+    target.includes('warning.or.kr') ||
+    body.includes('warning.or.kr') ||
+    body.includes('blocked') ||
+    body.includes('access denied') ||
+    body.includes('forbidden') ||
+    body.includes('접속이 차단') ||
+    body.includes('차단') ||
+    body.includes('접속불가') ||
+    body.includes('연결불가')
+  );
+}
+
+function linkStatusMemo(result) {
+  const status = result.check_status;
+  const code = result.http_status ? `HTTP ${result.http_status}` : 'HTTP 상태 없음';
+  const finalUrl = result.final_url && result.final_url !== result.checked_url ? ` 최종 URL: ${result.final_url}` : '';
+  if (status === 'normal') return `${code}. 정상 응답입니다.${finalUrl}`;
+  if (status === 'redirected') return `${code}. 다른 도메인으로 리다이렉트되어 새 URL 후보를 저장했습니다.${finalUrl}`;
+  if (status === 'challenge') return `${code}. Cloudflare 또는 자동화 차단 challenge가 감지되었습니다.${finalUrl}`;
+  if (status === 'restricted') return `${code}. 접근 제한 또는 차단 안내가 감지되었습니다.${finalUrl}`;
+  if (status === 'down') return `${code}. 페이지를 찾을 수 없거나 종료된 응답입니다.${finalUrl}`;
+  if (status === 'server_error') return `${code}. 서버 오류 응답입니다.${finalUrl}`;
+  if (status === 'timeout') return '15초 안에 응답하지 않아 timeout으로 기록했습니다.';
+  return `${code}. 상태를 명확히 판정하지 못했습니다.${finalUrl}`;
+}
+
+async function fetchWithTimeout(url, timeoutMs = 15000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      redirect: 'follow',
+      signal: controller.signal,
+      headers: {
+        'user-agent':
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function checkSiteLink(site) {
+  const checkedUrl = normalizeHttpUrl(site.url);
+  if (!checkedUrl) {
+    return {
+      site_id: site.id,
+      checked_url: site.url || '',
+      http_status: null,
+      check_status: 'unknown',
+      final_url: null,
+      candidate_new_url: null,
+      status_memo: '유효한 http/https URL이 아닙니다.',
+    };
+  }
+
+  try {
+    const response = await fetchWithTimeout(checkedUrl);
+    const finalUrl = normalizeHttpUrl(response.url || checkedUrl);
+    const httpStatus = Number(response.status) || null;
+    let sample = '';
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('text') || contentType.includes('html') || contentType.includes('json') || contentType.includes('xml')) {
+      sample = (await response.text()).slice(0, 250000);
+    }
+
+    const originalDomain = domainFromUrl(checkedUrl);
+    const finalDomain = domainFromUrl(finalUrl);
+    const candidateNewUrl = finalDomain && originalDomain && finalDomain !== originalDomain ? finalUrl : null;
+    let checkStatus = 'unknown';
+
+    if (isCloudflareChallenge(httpStatus, sample, response.headers)) {
+      checkStatus = 'challenge';
+    } else if (isRestrictedContent(sample, finalUrl)) {
+      checkStatus = 'restricted';
+    } else if (candidateNewUrl) {
+      checkStatus = 'redirected';
+    } else if (httpStatus >= 200 && httpStatus <= 299) {
+      checkStatus = 'normal';
+    } else if (httpStatus === 403) {
+      checkStatus = 'restricted';
+    } else if (httpStatus === 404 || httpStatus === 410) {
+      checkStatus = 'down';
+    } else if (httpStatus >= 500) {
+      checkStatus = 'server_error';
+    } else if (httpStatus >= 300 && httpStatus <= 399) {
+      checkStatus = candidateNewUrl ? 'redirected' : 'unknown';
+    }
+
+    const result = {
+      site_id: site.id,
+      checked_url: checkedUrl,
+      http_status: httpStatus,
+      check_status: checkStatus,
+      final_url: finalUrl,
+      candidate_new_url: checkStatus === 'redirected' ? candidateNewUrl : null,
+    };
+    return {
+      ...result,
+      status_memo: linkStatusMemo(result),
+    };
+  } catch (err) {
+    const isTimeout = err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('abort');
+    return {
+      site_id: site.id,
+      checked_url: checkedUrl,
+      http_status: null,
+      check_status: isTimeout ? 'timeout' : 'unknown',
+      final_url: null,
+      candidate_new_url: null,
+      status_memo: isTimeout ? '15초 안에 응답하지 않아 timeout으로 기록했습니다.' : `요청 오류: ${err?.message || 'unknown error'}`,
+    };
+  }
+}
+
+function shouldIncrementDownCount(checkStatus) {
+  return ['down', 'timeout', 'restricted', 'server_error'].includes(checkStatus);
+}
+
+async function saveSiteCheckResult(site, result) {
+  const nextDownCount = shouldIncrementDownCount(result.check_status) ? Number(site.down_count || 0) + 1 : 0;
+  await db.execute(
+    `UPDATE sites
+     SET last_checked_at = NOW(),
+         http_status = ?,
+         final_url = ?,
+         candidate_new_url = ?,
+         down_count = ?,
+         status_memo = ?,
+         check_status = ?
+     WHERE id = ?`,
+    [
+      result.http_status,
+      result.final_url,
+      result.candidate_new_url,
+      nextDownCount,
+      result.status_memo,
+      result.check_status,
+      site.id,
+    ]
+  );
+  await db.execute(
+    `INSERT INTO site_check_logs
+     (site_id, checked_url, http_status, check_status, final_url, candidate_new_url, memo)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      site.id,
+      result.checked_url,
+      result.http_status,
+      result.check_status,
+      result.final_url,
+      result.candidate_new_url,
+      result.status_memo,
+    ]
+  );
+  return {
+    ...result,
+    down_count: nextDownCount,
+  };
 }
 
 function normalizeSafeKey(value, fallback = '') {
@@ -1029,6 +1235,13 @@ async function initializeDatabase() {
   await ensureColumn('sites', 'is_hidden', 'TINYINT(1) NOT NULL DEFAULT 0', 'sort_order');
   await ensureColumn('sites', 'is_featured', 'TINYINT(1) NOT NULL DEFAULT 0', 'is_hidden');
   await ensureColumn('sites', 'featured_order', 'INT NOT NULL DEFAULT 0', 'is_featured');
+  await ensureColumn('sites', 'last_checked_at', 'DATETIME NULL', 'featured_order');
+  await ensureColumn('sites', 'http_status', 'INT NULL', 'last_checked_at');
+  await ensureColumn('sites', 'final_url', 'VARCHAR(500) NULL', 'http_status');
+  await ensureColumn('sites', 'candidate_new_url', 'VARCHAR(500) NULL', 'final_url');
+  await ensureColumn('sites', 'down_count', 'INT NOT NULL DEFAULT 0', 'candidate_new_url');
+  await ensureColumn('sites', 'status_memo', 'TEXT NULL', 'down_count');
+  await ensureColumn('sites', 'check_status', 'VARCHAR(50) NULL', 'status_memo');
   await db.execute("UPDATE sites SET mode = 'normal' WHERE mode IS NULL OR mode = ''");
 
   await db.execute(`
@@ -1145,6 +1358,23 @@ async function initializeDatabase() {
       INDEX idx_imported (imported),
       INDEX idx_mode (mode),
       INDEX idx_category_slug (category_slug),
+      INDEX idx_created_at (created_at)
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS site_check_logs (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      site_id INT NOT NULL,
+      checked_url VARCHAR(500) NULL,
+      http_status INT NULL,
+      check_status VARCHAR(50) NULL,
+      final_url VARCHAR(500) NULL,
+      candidate_new_url VARCHAR(500) NULL,
+      memo TEXT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      INDEX idx_site_id (site_id),
+      INDEX idx_check_status (check_status),
       INDEX idx_created_at (created_at)
     )
   `);
@@ -2218,6 +2448,185 @@ app.get('/api/admin/sites/check-duplicate', requireAdminToken, asyncRoute(async 
   } catch (err) {
     return jsonError(res, 400, err.code || 'INVALID_URL', err.message);
   }
+}));
+
+app.post('/api/admin/sites/:id/check-link', requireAdminToken, asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const site = await getSiteById(id);
+  if (!site) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+
+  const result = await checkSiteLink(site);
+  const saved = await saveSiteCheckResult(site, result);
+  const data = {
+    site_id: id,
+    ...saved,
+  };
+  return res.json({
+    ok: true,
+    ...data,
+    data,
+  });
+}));
+
+app.post('/api/admin/sites/check-links', requireAdminToken, asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.body?.mode);
+  const categorySlug = normalizeSafeKey(req.body?.category_slug || req.body?.categorySlug);
+  const onlyVisible = normalizeBooleanInt(req.body?.only_visible ?? req.body?.onlyVisible, 0) === 1;
+  const limit = clampInt(req.body?.limit, 1, 300, 100);
+  const clauses = ['s.mode = ?'];
+  const values = [mode];
+  if (onlyVisible) clauses.push('s.is_hidden = 0');
+  if (categorySlug) {
+    clauses.push('(LOWER(c.slug) = LOWER(?) OR LOWER(s.category) = LOWER(?))');
+    values.push(categorySlug, categorySlug);
+  }
+  values.push(limit);
+
+  const [sites] = await db.execute(
+    `SELECT ${siteColumns.map((column) => `s.${column}`).join(', ')}
+     FROM sites s
+     LEFT JOIN categories c ON c.name = s.category AND c.mode = s.mode
+     WHERE ${clauses.join(' AND ')}
+     ORDER BY s.sort_order ASC, s.name ASC, s.id ASC
+     LIMIT ?`,
+    values
+  );
+
+  const results = [];
+  const summary = {
+    total: sites.length,
+    checked: 0,
+    normal: 0,
+    redirected: 0,
+    restricted: 0,
+    challenge: 0,
+    down: 0,
+    timeout: 0,
+    server_error: 0,
+    unknown: 0,
+  };
+
+  for (const [index, site] of sites.entries()) {
+    if (index > 0) await sleep(randomDelayMs());
+    const result = await checkSiteLink(site);
+    const saved = await saveSiteCheckResult(site, result);
+    summary.checked += 1;
+    if (Object.prototype.hasOwnProperty.call(summary, saved.check_status)) {
+      summary[saved.check_status] += 1;
+    } else {
+      summary.unknown += 1;
+    }
+    results.push({
+      id: site.id,
+      name: site.name,
+      mode: site.mode,
+      category: site.category,
+      url: site.url,
+      ...saved,
+    });
+  }
+
+  return res.json({
+    ok: true,
+    data: {
+      mode,
+      category_slug: categorySlug,
+      only_visible: onlyVisible,
+      limit,
+      summary,
+      results,
+    },
+  });
+}));
+
+app.get('/api/admin/sites/link-check-report', requireAdminToken, asyncRoute(async (req, res) => {
+  const clauses = [];
+  const values = [];
+  if (req.query.mode) {
+    clauses.push('s.mode = ?');
+    values.push(normalizeMode(req.query.mode));
+  }
+  const status = normalizeSafeKey(req.query.status);
+  if (status === 'problem') {
+    clauses.push(`s.check_status IN ('down','timeout','restricted','server_error','redirected','challenge','unknown')`);
+  } else if (status) {
+    clauses.push('s.check_status = ?');
+    values.push(status);
+  }
+  const limit = clampInt(req.query.limit, 1, 500, 200);
+  values.push(limit);
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+
+  const [rows] = await db.execute(
+    `SELECT ${siteColumns.map((column) => `s.${column}`).join(', ')}, c.slug AS category_slug
+     FROM sites s
+     LEFT JOIN categories c ON c.name = s.category AND c.mode = s.mode
+     ${where}
+     ORDER BY s.last_checked_at DESC, s.id DESC
+     LIMIT ?`,
+    values
+  );
+  const [summaryRows] = await db.execute(
+    `SELECT COALESCE(check_status, 'unchecked') AS check_status, COUNT(*) AS count
+     FROM sites
+     ${req.query.mode ? 'WHERE mode = ?' : ''}
+     GROUP BY COALESCE(check_status, 'unchecked')`,
+    req.query.mode ? [normalizeMode(req.query.mode)] : []
+  );
+  const [lastRows] = await db.execute(
+    `SELECT MAX(last_checked_at) AS last_checked_at
+     FROM sites
+     ${req.query.mode ? 'WHERE mode = ?' : ''}`,
+    req.query.mode ? [normalizeMode(req.query.mode)] : []
+  );
+  return res.json({
+    ok: true,
+    data: {
+      rows,
+      summary: summaryRows,
+      last_checked_at: lastRows[0]?.last_checked_at || rows[0]?.last_checked_at || null,
+    },
+  });
+}));
+
+app.patch('/api/admin/sites/:id/url', requireAdminToken, asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const nextUrl = normalizeHttpUrl(req.body?.url);
+  if (!nextUrl) return jsonError(res, 400, 'INVALID_URL', 'A valid http or https URL is required.');
+
+  const site = await getSiteById(id);
+  if (!site) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+
+  const reason = normalizeOptionalText(req.body?.reason) || 'URL candidate approved';
+  const previousUrl = site.url;
+  const memo = `${reason}. Previous URL: ${previousUrl}. New URL: ${nextUrl}. Domain: ${domainFromUrl(nextUrl)}.`;
+
+  await db.execute(
+    `UPDATE sites
+     SET url = ?,
+         final_url = ?,
+         candidate_new_url = NULL,
+         check_status = 'normal',
+         http_status = NULL,
+         down_count = 0,
+         status_memo = ?,
+         last_checked_at = NOW()
+     WHERE id = ?`,
+    [nextUrl, nextUrl, memo, id]
+  );
+  await db.execute(
+    `INSERT INTO site_check_logs
+     (site_id, checked_url, http_status, check_status, final_url, candidate_new_url, memo)
+     VALUES (?, ?, NULL, 'normal', ?, NULL, ?)`,
+    [id, previousUrl, nextUrl, memo]
+  );
+
+  const updated = await getSiteById(id);
+  return res.json({ ok: true, data: updated });
 }));
 
 app.post('/api/admin/link-candidates/bulk', requireAdminToken, asyncRoute(async (req, res) => {

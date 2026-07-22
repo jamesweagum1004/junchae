@@ -184,6 +184,13 @@ const mapSite = (row: ApiRow, fallbackIndex: number): Site => ({
   featuredOrder: Number(row.featured_order ?? row.featuredOrder) || 0,
   sort_order: Number(row.sort_order ?? row.sortOrder) || 0,
   sortOrder: Number(row.sort_order ?? row.sortOrder) || 0,
+  last_checked_at: toStringValue(row.last_checked_at) || null,
+  http_status: row.http_status === null || row.http_status === undefined ? null : Number(row.http_status),
+  final_url: toStringValue(row.final_url) || null,
+  candidate_new_url: toStringValue(row.candidate_new_url) || null,
+  down_count: Number(row.down_count) || 0,
+  status_memo: toStringValue(row.status_memo) || null,
+  check_status: toStringValue(row.check_status) || null,
 });
 
 const mapAd = (row: ApiRow): Ad => ({

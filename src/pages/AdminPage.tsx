@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   FolderOpen,
   List,
@@ -17,6 +17,7 @@ import {
   KeyRound,
   Search,
   LayoutDashboard,
+  Link2,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAdminAuth } from '../context/AdminAuthContext';
@@ -33,6 +34,7 @@ import BridgeAdManager from '../admin/tabs/BridgeAdManager';
 import AccountSettings from '../admin/tabs/AccountSettings';
 import CmsDashboard from '../admin/tabs/CmsDashboard';
 import SeoFilesManager from '../admin/tabs/SeoFilesManager';
+import LinkCheckManager from '../admin/tabs/LinkCheckManager';
 
 const TABS = [
   { id: 'dashboard', label: '대시보드', icon: LayoutDashboard, desc: '방문자/CMS 현황' },
@@ -43,6 +45,7 @@ const TABS = [
   { id: 'ads', label: '광고 컨트롤러', icon: Megaphone, desc: '배너 관리' },
   { id: 'analytics', label: 'Google Site Kit', icon: BarChart2, desc: 'GA/Search Console' },
   { id: 'seo-files', label: 'SEO 파일 관리', icon: FileText, desc: 'robots/sitemap' },
+  { id: 'link-check', label: '링크 상태 점검', icon: Link2, desc: '서버 링크 체크' },
   { id: 'pseo', label: 'pSEO 관리', icon: FileText, desc: '사이트별 메타' },
   { id: 'ai-seo', label: 'AI SEO 센터', icon: Search, desc: 'AI SEO 생성' },
   { id: 'bridge', label: '브릿지 광고', icon: Radio, desc: 'ExoClick 설정' },
@@ -54,6 +57,18 @@ export default function AdminPage() {
   const { isAuthenticated, logout } = useAdminAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    const handleTabChange = (event: Event) => {
+      const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;
+      if (tab && TABS.some((item) => item.id === tab)) {
+        setActiveTab(tab);
+        setSidebarOpen(false);
+      }
+    };
+    window.addEventListener('junchae-admin-tab', handleTabChange);
+    return () => window.removeEventListener('junchae-admin-tab', handleTabChange);
+  }, []);
 
   if (!isAuthenticated) {
     return <AdminLogin onSuccess={() => {}} onExit={() => navigate('/')} />;
@@ -71,6 +86,7 @@ export default function AdminPage() {
       case 'ads': return <AdController />;
       case 'analytics': return <AnalyticsSettings />;
       case 'seo-files': return <SeoFilesManager />;
+      case 'link-check': return <LinkCheckManager />;
       case 'pseo': return <PSEOManager />;
       case 'ai-seo': return <AISEOManager />;
       case 'bridge': return <BridgeAdManager />;
