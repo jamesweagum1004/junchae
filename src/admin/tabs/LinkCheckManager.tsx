@@ -120,6 +120,15 @@ function isDismissed(row: LinkCheckRow) {
   return row.link_check_dismissed === true || row.link_check_dismissed === 1;
 }
 
+function isManualBrowserCheckStatus(status?: string | null) {
+  return status === 'challenge' || status === 'restricted';
+}
+
+function shortenUrl(url: string, maxLength = 42) {
+  if (url.length <= maxLength) return url;
+  return `${url.slice(0, Math.max(12, maxLength - 12))}...${url.slice(-8)}`;
+}
+
 function StatusBadge({ status }: { status?: string | null }) {
   const key = status || 'unchecked';
   return (
@@ -141,6 +150,56 @@ function StatCard({ label, value, icon: Icon }: { label: string; value: number; 
   );
 }
 
+function UrlCell({
+  url,
+  label,
+  copiedKey,
+  copiedUrlKey,
+  onCopy,
+  highlight = false,
+}: {
+  url?: string | null;
+  label: string;
+  copiedKey: string;
+  copiedUrlKey: string;
+  onCopy: (key: string, url: string) => void;
+  highlight?: boolean;
+}) {
+  if (!url) return <span className="text-slate-600">-</span>;
+
+  return (
+    <div className={`max-w-[240px] rounded-lg border p-2 ${highlight ? 'border-amber-500/30 bg-amber-500/10' : 'border-obsidian-500 bg-obsidian-700/40'}`}>
+      <a
+        href={url}
+        target="_blank"
+        rel="noopener noreferrer nofollow"
+        title={url}
+        className={`block truncate font-mono text-[11px] hover:underline ${highlight ? 'text-amber-300' : 'text-sky-300'}`}
+      >
+        {shortenUrl(url)}
+      </a>
+      <div className="mt-1 flex flex-wrap gap-1">
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer nofollow"
+          title={`${label} 열기`}
+          className="rounded border border-obsidian-500 px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-obsidian-600 hover:text-white"
+        >
+          열기
+        </a>
+        <button
+          type="button"
+          onClick={() => onCopy(copiedKey, url)}
+          className="rounded border border-obsidian-500 px-1.5 py-0.5 text-[10px] font-bold text-slate-300 hover:bg-obsidian-600 hover:text-white"
+        >
+          {copiedUrlKey === copiedKey ? '복사됨' : '복사'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function LinkCheckManager() {
   const { getModeData } = useData();
   const [mode, setMode] = useState<LinkMode>('secure');
@@ -149,6 +208,7 @@ export default function LinkCheckManager() {
   const [report, setReport] = useState<LinkCheckReport>(emptyReport);
   const [lastRunSummary, setLastRunSummary] = useState<BulkSummary | null>(null);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [copiedUrlKey, setCopiedUrlKey] = useState('');
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState('');
   const [notice, setNotice] = useState('');
@@ -198,6 +258,17 @@ export default function LinkCheckManager() {
   useEffect(() => {
     void loadReport(mode, categorySlug, displayFilter);
   }, [mode, categorySlug, displayFilter]);
+
+  const copyUrl = async (key: string, url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedUrlKey(key);
+      window.setTimeout(() => setCopiedUrlKey((current) => (current === key ? '' : current)), 1400);
+    } catch (err) {
+      console.error('URL copy failed', err);
+      setError('URL 복사에 실패했습니다.');
+    }
+  };
 
   const runCheck = async (targetMode: LinkMode, targetCategorySlug = '') => {
     setRunning(targetCategorySlug ? '선택 카테고리 점검' : `${targetMode.toUpperCase()} 전체 점검`);
@@ -261,7 +332,7 @@ export default function LinkCheckManager() {
 
   const applyCandidate = async (row: LinkCheckRow) => {
     if (!row.candidate_new_url) return;
-    if (!window.confirm(`${row.name}의 URL을 새 후보로 변경할까요?`)) return;
+    if (!window.confirm('현재 URL을 candidate_new_url로 변경하시겠습니까?')) return;
     setRunning(`apply-${row.id}`);
     setNotice('');
     setError('');
@@ -359,7 +430,7 @@ export default function LinkCheckManager() {
           <div>
             <h2 className="text-base font-black text-white">링크 상태 점검</h2>
             <p className="mt-1 text-xs text-slate-500">
-              원하는 모드와 카테고리를 선택해 서버에서 링크 상태를 확인합니다. 확인완료는 사이트 삭제나 URL 변경이 아니라 문제 목록 숨김 처리입니다.
+              원하는 모드와 카테고리를 선택해 서버에서 링크 상태를 확인합니다. Challenge/제한 항목은 서버가 우회하지 않고 브라우저 직접 확인 링크만 제공합니다.
             </p>
           </div>
           {running && <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-300">{running} 진행 중...</span>}
@@ -486,7 +557,7 @@ export default function LinkCheckManager() {
           </div>
         ) : (
           <div className="mt-4 overflow-x-auto">
-            <table className="min-w-[1500px] w-full text-left text-xs">
+            <table className="min-w-[1560px] w-full text-left text-xs">
               <thead className="text-slate-500">
                 <tr className="border-b border-obsidian-500">
                   <th className="py-2 pr-3">
@@ -515,71 +586,110 @@ export default function LinkCheckManager() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-obsidian-500">
-                {report.rows.map((row) => (
-                  <tr key={row.id} className="align-top text-slate-300">
-                    <td className="py-3 pr-3">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.includes(row.id)}
-                        onChange={() => toggleRowSelection(row.id)}
-                        aria-label={`${row.name} 선택`}
-                        className="h-4 w-4 rounded border-obsidian-500 bg-obsidian-700"
-                      />
-                    </td>
-                    <td className="py-3 pr-3 font-bold text-white">{row.name}</td>
-                    <td className="py-3 pr-3">{row.category || '-'}</td>
-                    <td className="py-3 pr-3">
-                      <a href={row.url} target="_blank" rel="noopener noreferrer" className="block max-w-[180px] truncate text-sky-300 hover:underline">
-                        {row.url}
-                      </a>
-                    </td>
-                    <td className="py-3 pr-3"><StatusBadge status={row.check_status} /></td>
-                    <td className="py-3 pr-3 font-mono">{row.http_status || '-'}</td>
-                    <td className="py-3 pr-3"><span className="block max-w-[180px] truncate text-slate-400">{row.final_url || '-'}</span></td>
-                    <td className="py-3 pr-3"><span className="block max-w-[180px] truncate text-amber-300">{row.candidate_new_url || '-'}</span></td>
-                    <td className="py-3 pr-3 font-mono">{row.down_count || 0}</td>
-                    <td className="py-3 pr-3 text-slate-500">{formatDate(row.last_checked_at)}</td>
-                    <td className="py-3 pr-3">{isDismissed(row) ? <span className="text-emerald-300">확인완료</span> : <span className="text-slate-500">-</span>}</td>
-                    <td className="py-3 pr-3 text-slate-500">{formatDate(row.link_check_dismissed_at)}</td>
-                    <td className="py-3 pr-3"><p className="max-w-[180px] text-[11px] leading-4 text-slate-500">{row.link_check_dismissed_reason || '-'}</p></td>
-                    <td className="py-3 pr-3"><p className="max-w-[260px] text-[11px] leading-4 text-slate-500">{row.status_memo || '-'}</p></td>
-                    <td className="py-3 pr-3">
-                      <div className="flex flex-col gap-1.5">
-                        <button
-                          onClick={() => void recheckSite(row.id)}
-                          disabled={Boolean(running)}
-                          className="rounded-lg border border-obsidian-500 px-2 py-1 text-[11px] font-bold text-slate-200 hover:bg-obsidian-700 disabled:opacity-50"
-                        >
-                          재점검
-                        </button>
+                {report.rows.map((row) => {
+                  const browserCheckUrl = row.final_url || row.url;
+                  return (
+                    <tr key={row.id} className={`align-top text-slate-300 ${row.candidate_new_url ? 'bg-amber-500/[0.04]' : ''}`}>
+                      <td className="py-3 pr-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedIds.includes(row.id)}
+                          onChange={() => toggleRowSelection(row.id)}
+                          aria-label={`${row.name} 선택`}
+                          className="h-4 w-4 rounded border-obsidian-500 bg-obsidian-700"
+                        />
+                      </td>
+                      <td className="py-3 pr-3 font-bold text-white">
+                        <div>{row.name}</div>
                         {row.candidate_new_url && (
-                          <button
-                            onClick={() => void applyCandidate(row)}
-                            disabled={Boolean(running)}
-                            className="rounded-lg border border-emerald-500/30 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
-                          >
-                            새 URL 후보 적용
-                          </button>
+                          <span className="mt-1 inline-flex rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                            새 URL 후보 있음
+                          </span>
                         )}
-                        {!isDismissed(row) && (
+                      </td>
+                      <td className="py-3 pr-3">{row.category || '-'}</td>
+                      <td className="py-3 pr-3">
+                        <UrlCell url={row.url} label="현재 URL" copiedKey={`${row.id}-url`} copiedUrlKey={copiedUrlKey} onCopy={copyUrl} />
+                      </td>
+                      <td className="py-3 pr-3"><StatusBadge status={row.check_status} /></td>
+                      <td className="py-3 pr-3 font-mono">{row.http_status || '-'}</td>
+                      <td className="py-3 pr-3">
+                        <UrlCell url={row.final_url} label="final_url" copiedKey={`${row.id}-final`} copiedUrlKey={copiedUrlKey} onCopy={copyUrl} />
+                      </td>
+                      <td className="py-3 pr-3">
+                        <UrlCell
+                          url={row.candidate_new_url}
+                          label="candidate_new_url"
+                          copiedKey={`${row.id}-candidate`}
+                          copiedUrlKey={copiedUrlKey}
+                          onCopy={copyUrl}
+                          highlight
+                        />
+                      </td>
+                      <td className="py-3 pr-3 font-mono">{row.down_count || 0}</td>
+                      <td className="py-3 pr-3 text-slate-500">{formatDate(row.last_checked_at)}</td>
+                      <td className="py-3 pr-3">{isDismissed(row) ? <span className="text-emerald-300">확인완료</span> : <span className="text-slate-500">-</span>}</td>
+                      <td className="py-3 pr-3 text-slate-500">{formatDate(row.link_check_dismissed_at)}</td>
+                      <td className="py-3 pr-3"><p className="max-w-[180px] text-[11px] leading-4 text-slate-500">{row.link_check_dismissed_reason || '-'}</p></td>
+                      <td className="py-3 pr-3"><p className="max-w-[260px] text-[11px] leading-4 text-slate-500">{row.status_memo || '-'}</p></td>
+                      <td className="py-3 pr-3">
+                        <div className="flex flex-col gap-1.5">
                           <button
-                            onClick={() => void dismissSite(row.id)}
+                            onClick={() => void recheckSite(row.id)}
                             disabled={Boolean(running)}
-                            className="rounded-lg border border-emerald-500/30 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
+                            className="rounded-lg border border-obsidian-500 px-2 py-1 text-[11px] font-bold text-slate-200 hover:bg-obsidian-700 disabled:opacity-50"
                           >
-                            확인완료
+                            재점검
                           </button>
-                        )}
-                        <button
-                          onClick={openSitesTab}
-                          className="rounded-lg border border-obsidian-500 px-2 py-1 text-[11px] font-bold text-slate-400 hover:bg-obsidian-700 hover:text-white"
-                        >
-                          사이트 수정
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {isManualBrowserCheckStatus(row.check_status) && browserCheckUrl && (
+                            <a
+                              href={browserCheckUrl}
+                              target="_blank"
+                              rel="noopener noreferrer nofollow"
+                              className="rounded-lg border border-sky-500/30 px-2 py-1 text-center text-[11px] font-bold text-sky-300 hover:bg-sky-500/10"
+                            >
+                              브라우저로 확인
+                            </a>
+                          )}
+                          {row.candidate_new_url && (
+                            <>
+                              <a
+                                href={row.candidate_new_url}
+                                target="_blank"
+                                rel="noopener noreferrer nofollow"
+                                className="rounded-lg border border-amber-500/30 px-2 py-1 text-center text-[11px] font-bold text-amber-300 hover:bg-amber-500/10"
+                              >
+                                새 탭 확인
+                              </a>
+                              <button
+                                onClick={() => void applyCandidate(row)}
+                                disabled={Boolean(running)}
+                                className="rounded-lg border border-emerald-500/30 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
+                              >
+                                새 URL 후보 적용
+                              </button>
+                            </>
+                          )}
+                          {!isDismissed(row) && (
+                            <button
+                              onClick={() => void dismissSite(row.id)}
+                              disabled={Boolean(running)}
+                              className="rounded-lg border border-emerald-500/30 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
+                            >
+                              확인완료
+                            </button>
+                          )}
+                          <button
+                            onClick={openSitesTab}
+                            className="rounded-lg border border-obsidian-500 px-2 py-1 text-[11px] font-bold text-slate-400 hover:bg-obsidian-700 hover:text-white"
+                          >
+                            사이트 수정
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
