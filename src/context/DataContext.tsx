@@ -191,6 +191,9 @@ const mapSite = (row: ApiRow, fallbackIndex: number): Site => ({
   down_count: Number(row.down_count) || 0,
   status_memo: toStringValue(row.status_memo) || null,
   check_status: toStringValue(row.check_status) || null,
+  link_check_dismissed: toBooleanValue(row.link_check_dismissed),
+  link_check_dismissed_at: toStringValue(row.link_check_dismissed_at) || null,
+  link_check_dismissed_reason: toStringValue(row.link_check_dismissed_reason) || null,
 });
 
 const mapAd = (row: ApiRow): Ad => ({

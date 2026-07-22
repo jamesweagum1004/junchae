@@ -4,7 +4,7 @@ import { useData } from '../../context/DataContext';
 import { apiJson } from '../../lib/adminApi';
 
 type LinkMode = 'secure' | 'normal';
-type DisplayFilter = 'all' | 'problem' | 'normal';
+type DisplayFilter = 'problem' | 'normal' | 'all' | 'dismissed_include' | 'dismissed_only';
 
 type SummaryRow = {
   check_status: string | null;
@@ -25,12 +25,16 @@ type LinkCheckRow = {
   down_count?: number;
   last_checked_at?: string | null;
   status_memo?: string | null;
+  link_check_dismissed?: boolean | number;
+  link_check_dismissed_at?: string | null;
+  link_check_dismissed_reason?: string | null;
 };
 
 type LinkCheckReport = {
   rows: LinkCheckRow[];
   summary: SummaryRow[];
   category_slug?: string;
+  dismissed?: 'exclude' | 'include' | 'only';
   last_checked_at: string | null;
 };
 
@@ -112,6 +116,10 @@ function formatDate(value?: string | null) {
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : value;
 }
 
+function isDismissed(row: LinkCheckRow) {
+  return row.link_check_dismissed === true || row.link_check_dismissed === 1;
+}
+
 function StatusBadge({ status }: { status?: string | null }) {
   const key = status || 'unchecked';
   return (
@@ -140,6 +148,7 @@ export default function LinkCheckManager() {
   const [displayFilter, setDisplayFilter] = useState<DisplayFilter>('problem');
   const [report, setReport] = useState<LinkCheckReport>(emptyReport);
   const [lastRunSummary, setLastRunSummary] = useState<BulkSummary | null>(null);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState('');
   const [notice, setNotice] = useState('');
@@ -149,12 +158,21 @@ export default function LinkCheckManager() {
   const activeSummary = lastRunSummary || summaryFromReport(report);
 
   const reportUrl = (nextMode = mode, nextCategorySlug = categorySlug, nextDisplayFilter = displayFilter) => {
-    const params = new URLSearchParams({
-      mode: nextMode,
-      limit: '300',
-    });
+    const params = new URLSearchParams({ mode: nextMode, limit: '300' });
     if (nextCategorySlug) params.set('category_slug', nextCategorySlug);
-    if (nextDisplayFilter !== 'all') params.set('status', nextDisplayFilter);
+    if (nextDisplayFilter === 'problem') {
+      params.set('status', 'problem');
+      params.set('dismissed', 'exclude');
+    } else if (nextDisplayFilter === 'normal') {
+      params.set('status', 'normal');
+      params.set('dismissed', 'exclude');
+    } else if (nextDisplayFilter === 'dismissed_include') {
+      params.set('dismissed', 'include');
+    } else if (nextDisplayFilter === 'dismissed_only') {
+      params.set('dismissed', 'only');
+    } else {
+      params.set('dismissed', 'exclude');
+    }
     return `/api/admin/sites/link-check-report?${params.toString()}`;
   };
 
@@ -164,6 +182,7 @@ export default function LinkCheckManager() {
     try {
       const data = await apiJson<LinkCheckReport>(reportUrl(nextMode, nextCategorySlug, nextDisplayFilter));
       setReport({ ...emptyReport, ...data });
+      setSelectedIds([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : '링크 점검 리포트를 불러오지 못했습니다.');
     } finally {
@@ -263,6 +282,59 @@ export default function LinkCheckManager() {
     }
   };
 
+  const removeRowsFromCurrentReport = (ids: number[]) => {
+    const idSet = new Set(ids);
+    setReport((current) => ({ ...current, rows: current.rows.filter((row) => !idSet.has(row.id)) }));
+    setSelectedIds((current) => current.filter((id) => !idSet.has(id)));
+  };
+
+  const dismissSite = async (siteId: number) => {
+    setRunning(`dismiss-${siteId}`);
+    setNotice('');
+    setError('');
+    try {
+      await apiJson<{ site_id: number; link_check_dismissed: number }>(`/api/admin/sites/${siteId}/link-check-dismiss`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          dismissed: true,
+          reason: 'manual reviewed',
+        }),
+      });
+      removeRowsFromCurrentReport([siteId]);
+      setNotice('확인완료 처리했습니다.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '확인완료 처리에 실패했습니다.');
+    } finally {
+      setRunning('');
+    }
+  };
+
+  const dismissSelected = async () => {
+    if (selectedIds.length === 0) {
+      setNotice('확인완료 처리할 항목을 선택해 주세요.');
+      return;
+    }
+    setRunning('selected-dismiss');
+    setNotice('');
+    setError('');
+    try {
+      const data = await apiJson<{ updated_count: number }>('/api/admin/sites/link-check-dismiss', {
+        method: 'POST',
+        body: JSON.stringify({
+          site_ids: selectedIds,
+          dismissed: true,
+          reason: 'bulk reviewed',
+        }),
+      });
+      removeRowsFromCurrentReport(selectedIds);
+      setNotice(`선택 항목 ${data.updated_count || selectedIds.length}개를 확인완료 처리했습니다.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '선택 항목 확인완료 처리에 실패했습니다.');
+    } finally {
+      setRunning('');
+    }
+  };
+
   const openSitesTab = () => {
     window.dispatchEvent(new CustomEvent('junchae-admin-tab', { detail: { tab: 'sites' } }));
   };
@@ -271,6 +343,14 @@ export default function LinkCheckManager() {
     () => categories.find((category) => category.slug === categorySlug)?.name || '',
     [categories, categorySlug]
   );
+  const rowIds = report.rows.map((row) => row.id);
+  const allRowsSelected = rowIds.length > 0 && rowIds.every((id) => selectedIds.includes(id));
+  const toggleRowSelection = (siteId: number) => {
+    setSelectedIds((current) => current.includes(siteId) ? current.filter((id) => id !== siteId) : [...current, siteId]);
+  };
+  const toggleAllRows = () => {
+    setSelectedIds(allRowsSelected ? [] : rowIds);
+  };
 
   return (
     <div className="space-y-5">
@@ -279,7 +359,7 @@ export default function LinkCheckManager() {
           <div>
             <h2 className="text-base font-black text-white">링크 상태 점검</h2>
             <p className="mt-1 text-xs text-slate-500">
-              원하는 모드와 카테고리를 선택해 서버에서 링크 상태를 확인합니다. 새 URL 후보는 승인 전까지 자동 반영되지 않습니다.
+              원하는 모드와 카테고리를 선택해 서버에서 링크 상태를 확인합니다. 확인완료는 사이트 삭제나 URL 변경이 아니라 문제 목록 숨김 처리입니다.
             </p>
           </div>
           {running && <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 text-xs font-bold text-amber-300">{running} 진행 중...</span>}
@@ -325,9 +405,11 @@ export default function LinkCheckManager() {
               }}
               className="w-full rounded-lg border border-obsidian-500 bg-obsidian-700 px-3 py-2 text-sm text-white"
             >
-              <option value="all">전체</option>
               <option value="problem">문제 링크만</option>
               <option value="normal">정상만</option>
+              <option value="all">전체</option>
+              <option value="dismissed_include">확인완료 포함</option>
+              <option value="dismissed_only">확인완료만</option>
             </select>
           </label>
         </div>
@@ -346,6 +428,13 @@ export default function LinkCheckManager() {
             className="inline-flex items-center gap-2 rounded-lg border border-red-500/30 px-3 py-2 text-xs font-bold text-red-300 hover:bg-red-500/10 disabled:opacity-50"
           >
             <RefreshCw size={14} /> 현재 필터 문제 링크 재점검
+          </button>
+          <button
+            onClick={() => void dismissSelected()}
+            disabled={Boolean(running) || selectedIds.length === 0}
+            className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/30 px-3 py-2 text-xs font-bold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
+          >
+            <CheckCircle2 size={14} /> 선택 항목 확인완료
           </button>
           <button
             onClick={() => void runCheck('secure', '')}
@@ -397,9 +486,18 @@ export default function LinkCheckManager() {
           </div>
         ) : (
           <div className="mt-4 overflow-x-auto">
-            <table className="min-w-[1280px] w-full text-left text-xs">
+            <table className="min-w-[1500px] w-full text-left text-xs">
               <thead className="text-slate-500">
                 <tr className="border-b border-obsidian-500">
+                  <th className="py-2 pr-3">
+                    <input
+                      type="checkbox"
+                      checked={allRowsSelected}
+                      onChange={toggleAllRows}
+                      aria-label="전체 선택"
+                      className="h-4 w-4 rounded border-obsidian-500 bg-obsidian-700"
+                    />
+                  </th>
                   <th className="py-2 pr-3">사이트명</th>
                   <th className="py-2 pr-3">카테고리</th>
                   <th className="py-2 pr-3">현재 URL</th>
@@ -409,6 +507,9 @@ export default function LinkCheckManager() {
                   <th className="py-2 pr-3">candidate_new_url</th>
                   <th className="py-2 pr-3">down_count</th>
                   <th className="py-2 pr-3">last_checked_at</th>
+                  <th className="py-2 pr-3">확인완료</th>
+                  <th className="py-2 pr-3">확인완료 시각</th>
+                  <th className="py-2 pr-3">dismissed_reason</th>
                   <th className="py-2 pr-3">status_memo</th>
                   <th className="py-2 pr-3">액션</th>
                 </tr>
@@ -416,6 +517,15 @@ export default function LinkCheckManager() {
               <tbody className="divide-y divide-obsidian-500">
                 {report.rows.map((row) => (
                   <tr key={row.id} className="align-top text-slate-300">
+                    <td className="py-3 pr-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.includes(row.id)}
+                        onChange={() => toggleRowSelection(row.id)}
+                        aria-label={`${row.name} 선택`}
+                        className="h-4 w-4 rounded border-obsidian-500 bg-obsidian-700"
+                      />
+                    </td>
                     <td className="py-3 pr-3 font-bold text-white">{row.name}</td>
                     <td className="py-3 pr-3">{row.category || '-'}</td>
                     <td className="py-3 pr-3">
@@ -429,6 +539,9 @@ export default function LinkCheckManager() {
                     <td className="py-3 pr-3"><span className="block max-w-[180px] truncate text-amber-300">{row.candidate_new_url || '-'}</span></td>
                     <td className="py-3 pr-3 font-mono">{row.down_count || 0}</td>
                     <td className="py-3 pr-3 text-slate-500">{formatDate(row.last_checked_at)}</td>
+                    <td className="py-3 pr-3">{isDismissed(row) ? <span className="text-emerald-300">확인완료</span> : <span className="text-slate-500">-</span>}</td>
+                    <td className="py-3 pr-3 text-slate-500">{formatDate(row.link_check_dismissed_at)}</td>
+                    <td className="py-3 pr-3"><p className="max-w-[180px] text-[11px] leading-4 text-slate-500">{row.link_check_dismissed_reason || '-'}</p></td>
                     <td className="py-3 pr-3"><p className="max-w-[260px] text-[11px] leading-4 text-slate-500">{row.status_memo || '-'}</p></td>
                     <td className="py-3 pr-3">
                       <div className="flex flex-col gap-1.5">
@@ -446,6 +559,15 @@ export default function LinkCheckManager() {
                             className="rounded-lg border border-emerald-500/30 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
                           >
                             새 URL 후보 적용
+                          </button>
+                        )}
+                        {!isDismissed(row) && (
+                          <button
+                            onClick={() => void dismissSite(row.id)}
+                            disabled={Boolean(running)}
+                            className="rounded-lg border border-emerald-500/30 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
+                          >
+                            확인완료
                           </button>
                         )}
                         <button

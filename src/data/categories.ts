@@ -51,6 +51,9 @@ export interface Site {
   down_count?: number;
   status_memo?: string | null;
   check_status?: string | null;
+  link_check_dismissed?: boolean;
+  link_check_dismissed_at?: string | null;
+  link_check_dismissed_reason?: string | null;
 }
 
 export interface Category {

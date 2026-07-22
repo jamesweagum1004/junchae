@@ -129,6 +129,9 @@ const siteColumns = [
   'down_count',
   'status_memo',
   'check_status',
+  'link_check_dismissed',
+  'link_check_dismissed_at',
+  'link_check_dismissed_reason',
   'created_at',
   'updated_at',
 ];
@@ -616,6 +619,7 @@ function nextDownCount(currentDownCount, result) {
 
 async function saveSiteCheckResult(site, result) {
   const updatedDownCount = nextDownCount(site.down_count, result);
+  const shouldResetDismissed = result.check_status === 'normal' || Boolean(result.candidate_new_url);
   await db.execute(
     `UPDATE sites
      SET last_checked_at = NOW(),
@@ -624,7 +628,10 @@ async function saveSiteCheckResult(site, result) {
          candidate_new_url = ?,
          down_count = ?,
          status_memo = ?,
-         check_status = ?
+         check_status = ?,
+         link_check_dismissed = CASE WHEN ? = 1 THEN 0 ELSE link_check_dismissed END,
+         link_check_dismissed_at = CASE WHEN ? = 1 THEN NULL ELSE link_check_dismissed_at END,
+         link_check_dismissed_reason = CASE WHEN ? = 1 THEN NULL ELSE link_check_dismissed_reason END
      WHERE id = ?`,
     [
       result.http_status,
@@ -633,6 +640,9 @@ async function saveSiteCheckResult(site, result) {
       updatedDownCount,
       result.status_memo,
       result.check_status,
+      shouldResetDismissed ? 1 : 0,
+      shouldResetDismissed ? 1 : 0,
+      shouldResetDismissed ? 1 : 0,
       site.id,
     ]
   );
@@ -653,6 +663,7 @@ async function saveSiteCheckResult(site, result) {
   return {
     ...result,
     down_count: updatedDownCount,
+    link_check_dismissed: shouldResetDismissed ? 0 : site.link_check_dismissed,
   };
 }
 
@@ -1256,6 +1267,9 @@ async function initializeDatabase() {
   await ensureColumn('sites', 'down_count', 'INT NOT NULL DEFAULT 0', 'candidate_new_url');
   await ensureColumn('sites', 'status_memo', 'TEXT NULL', 'down_count');
   await ensureColumn('sites', 'check_status', 'VARCHAR(50) NULL', 'status_memo');
+  await ensureColumn('sites', 'link_check_dismissed', 'TINYINT(1) NOT NULL DEFAULT 0', 'check_status');
+  await ensureColumn('sites', 'link_check_dismissed_at', 'DATETIME NULL', 'link_check_dismissed');
+  await ensureColumn('sites', 'link_check_dismissed_reason', 'TEXT NULL', 'link_check_dismissed_at');
   await db.execute("UPDATE sites SET mode = 'normal' WHERE mode IS NULL OR mode = ''");
 
   await db.execute(`
@@ -2573,6 +2587,14 @@ app.get('/api/admin/sites/link-check-report', requireAdminToken, asyncRoute(asyn
     summaryClauses.push('LOWER(c.slug) = LOWER(?)');
     summaryValues.push(categorySlug);
   }
+  const dismissedFilter = normalizeSafeKey(req.query.dismissed, 'exclude');
+  if (dismissedFilter === 'only') {
+    clauses.push('s.link_check_dismissed = 1');
+    summaryClauses.push('s.link_check_dismissed = 1');
+  } else if (dismissedFilter !== 'include') {
+    clauses.push('s.link_check_dismissed = 0');
+    summaryClauses.push('s.link_check_dismissed = 0');
+  }
   const status = normalizeSafeKey(req.query.status);
   if (status === 'problem') {
     clauses.push(`s.check_status IN ('down','timeout','restricted','server_error','redirected','challenge','unknown')`);
@@ -2614,7 +2636,67 @@ app.get('/api/admin/sites/link-check-report', requireAdminToken, asyncRoute(asyn
       rows,
       summary: summaryRows,
       category_slug: categorySlug,
+      dismissed: dismissedFilter === 'include' || dismissedFilter === 'only' ? dismissedFilter : 'exclude',
       last_checked_at: lastRows[0]?.last_checked_at || rows[0]?.last_checked_at || null,
+    },
+  });
+}));
+
+app.patch('/api/admin/sites/:id/link-check-dismiss', requireAdminToken, asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const dismissed = normalizeBooleanInt(req.body?.dismissed, 1) === 1;
+  const reason = normalizeOptionalText(req.body?.reason) || (dismissed ? 'manual reviewed' : null);
+  const [result] = await db.execute(
+    `UPDATE sites
+     SET link_check_dismissed = ?,
+         link_check_dismissed_at = ${dismissed ? 'NOW()' : 'NULL'},
+         link_check_dismissed_reason = ?
+     WHERE id = ?`,
+    [dismissed ? 1 : 0, dismissed ? reason : null, id]
+  );
+  if (result.affectedRows === 0) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+
+  return res.json({
+    ok: true,
+    site_id: id,
+    link_check_dismissed: dismissed ? 1 : 0,
+    data: {
+      site_id: id,
+      link_check_dismissed: dismissed ? 1 : 0,
+    },
+  });
+}));
+
+app.post('/api/admin/sites/link-check-dismiss', requireAdminToken, asyncRoute(async (req, res) => {
+  const siteIds = Array.isArray(req.body?.site_ids)
+    ? req.body.site_ids.map(parseId).filter(Boolean)
+    : [];
+  const uniqueSiteIds = [...new Set(siteIds)];
+  if (uniqueSiteIds.length === 0) {
+    return jsonError(res, 400, 'INVALID_ID', 'site_ids must contain valid numeric ids.');
+  }
+
+  const dismissed = normalizeBooleanInt(req.body?.dismissed, 1) === 1;
+  const reason = normalizeOptionalText(req.body?.reason) || (dismissed ? 'bulk reviewed' : null);
+  const placeholders = uniqueSiteIds.map(() => '?').join(', ');
+  const [result] = await db.execute(
+    `UPDATE sites
+     SET link_check_dismissed = ?,
+         link_check_dismissed_at = ${dismissed ? 'NOW()' : 'NULL'},
+         link_check_dismissed_reason = ?
+     WHERE id IN (${placeholders})`,
+    [dismissed ? 1 : 0, dismissed ? reason : null, ...uniqueSiteIds]
+  );
+
+  return res.json({
+    ok: true,
+    updated_count: result.affectedRows || 0,
+    data: {
+      updated_count: result.affectedRows || 0,
+      site_ids: uniqueSiteIds,
+      link_check_dismissed: dismissed ? 1 : 0,
     },
   });
 }));
