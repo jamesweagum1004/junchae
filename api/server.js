@@ -504,6 +504,11 @@ function linkStatusMemo(result) {
   return `${code}. 상태를 명확히 판정하지 못했습니다.${finalUrl}`;
 }
 
+function appendDomainChangeMemo(memo, result) {
+  if (!result.candidate_new_url || !result.original_domain || !result.final_domain) return memo;
+  return `${memo} 최종 URL 도메인 변경 감지: ${result.original_domain} → ${result.final_domain}. 새 URL 후보 저장: ${result.candidate_new_url}`;
+}
+
 async function fetchWithTimeout(url, timeoutMs = 15000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -576,11 +581,13 @@ async function checkSiteLink(site) {
       http_status: httpStatus,
       check_status: checkStatus,
       final_url: finalUrl,
-      candidate_new_url: checkStatus === 'redirected' ? candidateNewUrl : null,
+      candidate_new_url: candidateNewUrl,
+      original_domain: originalDomain,
+      final_domain: finalDomain,
     };
     return {
       ...result,
-      status_memo: linkStatusMemo(result),
+      status_memo: appendDomainChangeMemo(linkStatusMemo(result), result),
     };
   } catch (err) {
     const isTimeout = err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('abort');
@@ -596,12 +603,19 @@ async function checkSiteLink(site) {
   }
 }
 
-function shouldIncrementDownCount(checkStatus) {
-  return ['down', 'timeout', 'restricted', 'server_error'].includes(checkStatus);
+function nextDownCount(currentDownCount, result) {
+  const current = Number(currentDownCount || 0);
+  if (result.check_status === 'normal' || result.check_status === 'redirected') return 0;
+  if (result.check_status === 'challenge') return current;
+  if (result.check_status === 'restricted') {
+    return Number(result.http_status) === 403 ? current + 1 : current;
+  }
+  if (['down', 'timeout', 'server_error', 'unknown'].includes(result.check_status)) return current + 1;
+  return current;
 }
 
 async function saveSiteCheckResult(site, result) {
-  const nextDownCount = shouldIncrementDownCount(result.check_status) ? Number(site.down_count || 0) + 1 : 0;
+  const updatedDownCount = nextDownCount(site.down_count, result);
   await db.execute(
     `UPDATE sites
      SET last_checked_at = NOW(),
@@ -616,7 +630,7 @@ async function saveSiteCheckResult(site, result) {
       result.http_status,
       result.final_url,
       result.candidate_new_url,
-      nextDownCount,
+      updatedDownCount,
       result.status_memo,
       result.check_status,
       site.id,
@@ -638,7 +652,7 @@ async function saveSiteCheckResult(site, result) {
   );
   return {
     ...result,
-    down_count: nextDownCount,
+    down_count: updatedDownCount,
   };
 }
 
@@ -2479,8 +2493,8 @@ app.post('/api/admin/sites/check-links', requireAdminToken, asyncRoute(async (re
   const values = [mode];
   if (onlyVisible) clauses.push('s.is_hidden = 0');
   if (categorySlug) {
-    clauses.push('(LOWER(c.slug) = LOWER(?) OR LOWER(s.category) = LOWER(?))');
-    values.push(categorySlug, categorySlug);
+    clauses.push('LOWER(c.slug) = LOWER(?)');
+    values.push(categorySlug);
   }
   values.push(limit);
 
@@ -2544,9 +2558,20 @@ app.post('/api/admin/sites/check-links', requireAdminToken, asyncRoute(async (re
 app.get('/api/admin/sites/link-check-report', requireAdminToken, asyncRoute(async (req, res) => {
   const clauses = [];
   const values = [];
+  const summaryClauses = [];
+  const summaryValues = [];
   if (req.query.mode) {
     clauses.push('s.mode = ?');
     values.push(normalizeMode(req.query.mode));
+    summaryClauses.push('s.mode = ?');
+    summaryValues.push(normalizeMode(req.query.mode));
+  }
+  const categorySlug = normalizeSafeKey(req.query.category_slug || req.query.categorySlug);
+  if (categorySlug) {
+    clauses.push('LOWER(c.slug) = LOWER(?)');
+    values.push(categorySlug);
+    summaryClauses.push('LOWER(c.slug) = LOWER(?)');
+    summaryValues.push(categorySlug);
   }
   const status = normalizeSafeKey(req.query.status);
   if (status === 'problem') {
@@ -2569,23 +2594,26 @@ app.get('/api/admin/sites/link-check-report', requireAdminToken, asyncRoute(asyn
     values
   );
   const [summaryRows] = await db.execute(
-    `SELECT COALESCE(check_status, 'unchecked') AS check_status, COUNT(*) AS count
-     FROM sites
-     ${req.query.mode ? 'WHERE mode = ?' : ''}
-     GROUP BY COALESCE(check_status, 'unchecked')`,
-    req.query.mode ? [normalizeMode(req.query.mode)] : []
+    `SELECT COALESCE(s.check_status, 'unchecked') AS check_status, COUNT(*) AS count
+     FROM sites s
+     LEFT JOIN categories c ON c.name = s.category AND c.mode = s.mode
+     ${summaryClauses.length ? `WHERE ${summaryClauses.join(' AND ')}` : ''}
+     GROUP BY COALESCE(s.check_status, 'unchecked')`,
+    summaryValues
   );
   const [lastRows] = await db.execute(
-    `SELECT MAX(last_checked_at) AS last_checked_at
-     FROM sites
-     ${req.query.mode ? 'WHERE mode = ?' : ''}`,
-    req.query.mode ? [normalizeMode(req.query.mode)] : []
+    `SELECT MAX(s.last_checked_at) AS last_checked_at
+     FROM sites s
+     LEFT JOIN categories c ON c.name = s.category AND c.mode = s.mode
+     ${summaryClauses.length ? `WHERE ${summaryClauses.join(' AND ')}` : ''}`,
+    summaryValues
   );
   return res.json({
     ok: true,
     data: {
       rows,
       summary: summaryRows,
+      category_slug: categorySlug,
       last_checked_at: lastRows[0]?.last_checked_at || rows[0]?.last_checked_at || null,
     },
   });
