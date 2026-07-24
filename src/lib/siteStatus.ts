@@ -81,13 +81,13 @@ export const isProblemStatus = (checkStatus?: unknown, siteStatus?: unknown) => 
 export const getCheckStatusLabel = (value: unknown) => {
   const status = normalizeCheckStatus(value);
   const labels: Record<string, string> = {
-    normal: '정상',
-    redirected: '주소 변경',
+    normal: '정상 확인',
+    redirected: '주소 변경 감지',
     restricted: '접근 제한',
-    challenge: 'Challenge',
-    down: '접속불가',
-    timeout: '타임아웃',
-    server_error: '서버 오류',
+    challenge: '자동 확인 제한',
+    down: '확인 필요',
+    timeout: '확인 필요',
+    server_error: '확인 필요',
     unknown: '확인 필요',
     unchecked: '미점검',
   };

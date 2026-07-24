@@ -70,9 +70,11 @@ export function StatusSiteCard({ site, isSecure }: { site: StatusSite; isSecure:
 export function RecentlyViewedSitesBlock({
   items,
   isSecure,
+  limit = 8,
 }: {
   items: RecentlyViewedSite[];
   isSecure: boolean;
+  limit?: number;
 }) {
   const navigate = useNavigate();
   if (items.length === 0) return null;
@@ -86,7 +88,7 @@ export function RecentlyViewedSitesBlock({
         </span>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        {items.slice(0, 8).map((item) => (
+        {items.slice(0, limit).map((item) => (
           <button
             key={`${item.site_id}-${item.viewed_at}`}
             onClick={() => navigate(item.slug)}

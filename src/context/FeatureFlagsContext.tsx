@@ -8,6 +8,7 @@ export type GrowthFeatureFlags = {
   show_url_status_tool: boolean;
   show_category_status_stats: boolean;
   show_recently_viewed_sites: boolean;
+  recently_viewed_limit: number;
 };
 
 export const defaultGrowthFeatureFlags: GrowthFeatureFlags = {
@@ -18,6 +19,7 @@ export const defaultGrowthFeatureFlags: GrowthFeatureFlags = {
   show_url_status_tool: true,
   show_category_status_stats: true,
   show_recently_viewed_sites: false,
+  recently_viewed_limit: 8,
 };
 
 type FeatureFlagsContextType = {
@@ -32,7 +34,9 @@ const normalizeFlags = (value: unknown): GrowthFeatureFlags => {
   return Object.fromEntries(
     Object.entries(defaultGrowthFeatureFlags).map(([key, fallback]) => [
       key,
-      typeof source[key] === 'boolean' ? source[key] : fallback,
+      key === 'recently_viewed_limit'
+        ? Math.max(3, Math.min(20, Number(source[key]) || 8))
+        : typeof source[key] === 'boolean' ? source[key] : fallback,
     ])
   ) as GrowthFeatureFlags;
 };

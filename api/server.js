@@ -84,6 +84,7 @@ const defaultGrowthFeatureSettings = {
   show_url_status_tool: 'true',
   show_category_status_stats: 'true',
   show_recently_viewed_sites: 'false',
+  recently_viewed_limit: '8',
 };
 
 const analyticsRateWindowMs = 60 * 1000;
@@ -2054,10 +2055,12 @@ function parseBooleanSetting(value, fallback = false) {
 
 function normalizeGrowthFeatureSettings(settings = {}) {
   return Object.fromEntries(
-    Object.entries(defaultGrowthFeatureSettings).map(([key, fallback]) => [
-      key,
-      parseBooleanSetting(settings[key], fallback === 'true'),
-    ])
+    Object.entries(defaultGrowthFeatureSettings).map(([key, fallback]) => {
+      if (key === 'recently_viewed_limit') {
+        return [key, clampInt(settings[key], 3, 20, Number(fallback) || 8)];
+      }
+      return [key, parseBooleanSetting(settings[key], fallback === 'true')];
+    })
   );
 }
 
@@ -2066,7 +2069,12 @@ function growthFeaturePayloadForSave(settings = {}) {
   return Object.fromEntries(
     Object.entries(settings)
       .filter(([key]) => allowedKeys.has(key))
-      .map(([key, value]) => [key, String(parseBooleanSetting(value, defaultGrowthFeatureSettings[key] === 'true'))])
+      .map(([key, value]) => [
+        key,
+        key === 'recently_viewed_limit'
+          ? String(clampInt(value, 3, 20, 8))
+          : String(parseBooleanSetting(value, defaultGrowthFeatureSettings[key] === 'true')),
+      ])
   );
 }
 

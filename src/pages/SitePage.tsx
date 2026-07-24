@@ -99,7 +99,7 @@ const parseFaq = (value?: Site['seo_faq']): FaqItem[] => {
 export default function SitePage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { isSecure } = useTheme();
+  const { isSecure, mode } = useTheme();
   const { allSites, categories } = useData();
   const { flags } = useFeatureFlags();
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
@@ -229,9 +229,9 @@ export default function SitePage() {
 
   useEffect(() => {
     if (!site || !flags.show_recently_viewed_sites) return;
-    saveRecentlyViewedSite(site);
-    setRecentlyViewed(readRecentlyViewedSites().filter((item) => item.site_id !== site.id));
-  }, [flags.show_recently_viewed_sites, site]);
+    saveRecentlyViewedSite(site, mode);
+    setRecentlyViewed(readRecentlyViewedSites(mode).filter((item) => item.site_id !== site.id));
+  }, [flags.show_recently_viewed_sites, mode, site]);
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${isSecure ? 'bg-obsidian-deep' : 'bg-metallic'}`}>
@@ -577,7 +577,7 @@ export default function SitePage() {
 
             {flags.show_recently_viewed_sites && (
               <div className="mt-8">
-                <RecentlyViewedSitesBlock items={recentlyViewed} isSecure={isSecure} />
+                <RecentlyViewedSitesBlock items={recentlyViewed} isSecure={isSecure} limit={flags.recently_viewed_limit} />
               </div>
             )}
           </>

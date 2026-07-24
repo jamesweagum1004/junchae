@@ -1,9 +1,10 @@
 import { Zap, Shield, Lock } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
 import { useFeatureFlags } from '../context/FeatureFlagsContext';
 
 export default function Header() {
+  const navigate = useNavigate();
   const { isSecure, setMode } = useTheme();
   const { flags } = useFeatureFlags();
 
@@ -17,7 +18,12 @@ export default function Header() {
     >
       <div className="max-w-7xl mx-auto px-4 h-14 flex items-center justify-between">
         {/* Logo */}
-        <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          aria-label={isSecure ? '전체닷컴 안전 접속 홈으로 이동' : '전체닷컴 일반 홈으로 이동'}
+          className="flex cursor-pointer items-center gap-2 rounded-xl text-left outline-none transition-opacity hover:opacity-90 focus-visible:ring-2 focus-visible:ring-neon-orange/70"
+        >
           <div
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all duration-200 ${
               isSecure
@@ -40,7 +46,7 @@ export default function Header() {
               [SECURE MODE]
             </span>
           )}
-        </div>
+        </button>
 
         {/* Segmented VPN Control — Standard ⇄ Secure */}
         <nav className="hidden md:flex items-center gap-2">

@@ -3,7 +3,9 @@ import { CheckCircle2, Save, ToggleLeft, ToggleRight } from 'lucide-react';
 import { apiJson } from '../../lib/adminApi';
 import { defaultGrowthFeatureFlags, GrowthFeatureFlags, useFeatureFlags } from '../../context/FeatureFlagsContext';
 
-const featureItems: { key: keyof GrowthFeatureFlags; title: string; description: string }[] = [
+type BooleanFeatureKey = Exclude<keyof GrowthFeatureFlags, 'recently_viewed_limit'>;
+
+const featureItems: { key: BooleanFeatureKey; title: string; description: string }[] = [
   {
     key: 'show_home_status_sections',
     title: '메인 상태 섹션',
@@ -66,8 +68,14 @@ export default function GrowthFeatureSettings() {
     void load();
   }, []);
 
-  const toggle = (key: keyof GrowthFeatureFlags) => {
+  const toggle = (key: BooleanFeatureKey) => {
     setDraft((current) => ({ ...current, [key]: !current[key] }));
+    setNotice('');
+  };
+
+  const updateRecentlyViewedLimit = (value: string) => {
+    const next = Math.max(3, Math.min(20, Number(value) || 8));
+    setDraft((current) => ({ ...current, recently_viewed_limit: next }));
     setNotice('');
   };
 
@@ -143,6 +151,25 @@ export default function GrowthFeatureSettings() {
             </button>
           );
         })}
+      </div>
+
+      <div className="rounded-xl border border-obsidian-500 bg-obsidian-600 p-4">
+        <label className="block">
+          <span className="text-sm font-black text-white">최근 본 사이트 노출 수</span>
+          <span className="mt-1 block text-xs leading-5 text-slate-500">
+            메인/상세 페이지에 표시할 최근 본 사이트 개수를 설정합니다.
+          </span>
+          <input
+            type="number"
+            min={3}
+            max={20}
+            value={draft.recently_viewed_limit}
+            onChange={(event) => updateRecentlyViewedLimit(event.target.value)}
+            disabled={loading || saving}
+            className="mt-3 w-32 rounded-lg border border-obsidian-500 bg-obsidian-700 px-3 py-2 text-sm font-bold text-white outline-none focus:border-neon-orange disabled:opacity-60"
+          />
+        </label>
+        <p className="mt-2 font-mono text-[10px] text-slate-600">recently_viewed_limit · 3~20</p>
       </div>
 
       <button

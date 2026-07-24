@@ -66,8 +66,8 @@ export default function MainPage() {
 
   useEffect(() => {
     if (!flags.show_recently_viewed_sites) return;
-    setRecentlyViewed(readRecentlyViewedSites());
-  }, [flags.show_recently_viewed_sites]);
+    setRecentlyViewed(readRecentlyViewedSites(isSecure ? 'secure' : 'standard'));
+  }, [flags.show_recently_viewed_sites, isSecure]);
 
   const handleSiteClick = (site: Site) => {
     if (isMobile) {
@@ -270,7 +270,7 @@ export default function MainPage() {
         )}
 
         {flags.show_recently_viewed_sites && (
-          <RecentlyViewedSitesBlock items={recentlyViewed} isSecure={isSecure} />
+          <RecentlyViewedSitesBlock items={recentlyViewed} isSecure={isSecure} limit={flags.recently_viewed_limit} />
         )}
 
         {/* Premium Ads */}
