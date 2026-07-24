@@ -8,7 +8,7 @@ import { useTheme } from '../context/ThemeContext';
 import type { Site } from '../data/categories';
 import { categoryPath } from '../lib/categorySlug';
 import { getSiteSlug, sitePath, slugifySiteName } from '../lib/siteSlug';
-import { calculateSiteStatusScore, getCheckStatusBadgeClass, getCheckStatusLabel, getSiteStatusMeta, normalizeCheckStatus } from '../lib/siteStatus';
+import { calculateSiteStatusScore, getCheckStatusBadgeClass, getCheckStatusLabel, getSiteStatusMeta, isProblemStatus, normalizeCheckStatus } from '../lib/siteStatus';
 import { useFeatureFlags } from '../context/FeatureFlagsContext';
 import { readRecentlyViewedSites, RecentlyViewedSite, saveRecentlyViewedSite } from '../lib/recentlyViewedSites';
 import { RecentlyViewedSitesBlock, formatDateTime } from '../components/GrowthFeatureBlocks';
@@ -181,6 +181,9 @@ export default function SitePage() {
     [site?.categoryName, site?.id, visibleAllSites]
   );
   const statusScore = site ? calculateSiteStatusScore(site) : 0;
+  const needsLatestAddressReview = site
+    ? isProblemStatus(site.check_status, site.status) && ['challenge', 'restricted', 'latest_unknown', 'candidate_detected'].includes(normalizeCheckStatus(site.check_status))
+    : false;
   const timelineItems = useMemo<CheckHistoryItem[]>(() => {
     if (!site) return [];
     if (checkHistory.length > 0) return checkHistory.slice(0, 5);
@@ -376,7 +379,17 @@ export default function SitePage() {
                 </div>
                 {site.candidate_new_url && (
                   <div className="mt-3 inline-flex rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-300">
-                    주소 변경 후보 감지
+                    새 주소 후보 감지 · 관리자 확인 필요
+                  </div>
+                )}
+                {needsLatestAddressReview && (
+                  <div className={`mt-3 rounded-xl border p-3 text-sm leading-6 ${
+                    isSecure ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-amber-200 bg-amber-50 text-amber-800'
+                  }`}>
+                    자동 점검으로 최신 주소를 확정하지 못했습니다. 주소 변경 가능성이 있으므로 확인이 필요합니다.
+                    {site.candidate_new_url && (
+                      <div className="mt-1 break-all font-mono text-xs">새 주소 후보: {site.candidate_new_url}</div>
+                    )}
                   </div>
                 )}
               </section>

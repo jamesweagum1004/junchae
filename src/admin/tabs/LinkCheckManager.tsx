@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Activity, AlertTriangle, CheckCircle2, ExternalLink, Link2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { useData } from '../../context/DataContext';
 import { apiJson } from '../../lib/adminApi';
+import { getCheckStatusBadgeClass, getCheckStatusLabel, isProblemStatus } from '../../lib/siteStatus';
 
 type LinkMode = 'secure' | 'normal';
 type DisplayFilter = 'problem' | 'normal' | 'all' | 'dismissed_include' | 'dismissed_only';
@@ -42,9 +43,11 @@ type BulkSummary = {
   total: number;
   checked: number;
   normal: number;
+  candidate_detected: number;
   redirected: number;
   restricted: number;
   challenge: number;
+  latest_unknown: number;
   down: number;
   timeout: number;
   server_error: number;
@@ -88,6 +91,9 @@ const statusClasses: Record<string, string> = {
   unchecked: 'border-slate-500/30 bg-slate-500/10 text-slate-400',
 };
 
+void statusLabels;
+void statusClasses;
+
 function countFor(summary: SummaryRow[], status: string) {
   return summary
     .filter((row) => String(row.check_status || 'unchecked') === status)
@@ -100,9 +106,11 @@ function summaryFromReport(report: LinkCheckReport): BulkSummary {
     total: summary.reduce((sum, row) => sum + Number(row.count || 0), 0),
     checked: summary.reduce((sum, row) => sum + (String(row.check_status || 'unchecked') === 'unchecked' ? 0 : Number(row.count || 0)), 0),
     normal: countFor(summary, 'normal'),
+    candidate_detected: countFor(summary, 'candidate_detected'),
     redirected: countFor(summary, 'redirected'),
     restricted: countFor(summary, 'restricted'),
     challenge: countFor(summary, 'challenge'),
+    latest_unknown: countFor(summary, 'latest_unknown'),
     down: countFor(summary, 'down'),
     timeout: countFor(summary, 'timeout'),
     server_error: countFor(summary, 'server_error'),
@@ -121,11 +129,11 @@ function isDismissed(row: LinkCheckRow) {
 }
 
 function isManualBrowserCheckStatus(status?: string | null) {
-  return status === 'challenge' || status === 'restricted';
+  return status === 'challenge' || status === 'restricted' || status === 'latest_unknown' || status === 'candidate_detected';
 }
 
 function canMarkSiteDown(status?: string | null) {
-  return status === 'down' || status === 'timeout' || status === 'restricted';
+  return status === 'down' || status === 'timeout' || status === 'restricted' || status === 'latest_unknown';
 }
 
 function shortenUrl(url: string, maxLength = 42) {
@@ -136,8 +144,8 @@ function shortenUrl(url: string, maxLength = 42) {
 function StatusBadge({ status }: { status?: string | null }) {
   const key = status || 'unchecked';
   return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-bold ${statusClasses[key] || statusClasses.unknown}`}>
-      {statusLabels[key] || key}
+    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-bold ${getCheckStatusBadgeClass(key, true)}`}>
+      {getCheckStatusLabel(key)}
     </span>
   );
 }
@@ -317,7 +325,7 @@ export default function LinkCheckManager({ onEditSite }: LinkCheckManagerProps) 
   };
 
   const recheckCurrentProblems = async () => {
-    const problemRows = report.rows.filter((row) => row.check_status !== 'normal');
+    const problemRows = report.rows.filter((row) => isProblemStatus(row.check_status));
     if (problemRows.length === 0) {
       setNotice('현재 필터에서 재점검할 문제 링크가 없습니다.');
       return;
@@ -356,6 +364,26 @@ export default function LinkCheckManager({ onEditSite }: LinkCheckManagerProps) 
       await loadReport(mode, categorySlug, displayFilter);
     } catch (err) {
       setError(err instanceof Error ? err.message : '새 URL 후보 반영에 실패했습니다.');
+    } finally {
+      setRunning('');
+    }
+  };
+
+  const setManualCandidate = async (row: LinkCheckRow) => {
+    const candidate = window.prompt('새 URL 후보를 입력하세요. 자동 적용되지 않고 후보로만 저장됩니다.', row.candidate_new_url || row.url || 'https://');
+    if (!candidate) return;
+    setRunning(`candidate-${row.id}`);
+    setNotice('');
+    setError('');
+    try {
+      await apiJson<LinkCheckRow>(`/api/admin/sites/${row.id}/candidate-url`, {
+        method: 'PATCH',
+        body: JSON.stringify({ candidate_new_url: candidate }),
+      });
+      setNotice('새 URL 후보를 수동 등록했습니다. URL은 자동 변경되지 않았습니다.');
+      await loadReport(mode, categorySlug, displayFilter);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '새 URL 후보 수동 등록에 실패했습니다.');
     } finally {
       setRunning('');
     }
@@ -559,9 +587,11 @@ export default function LinkCheckManager({ onEditSite }: LinkCheckManagerProps) 
         <StatCard icon={Activity} label="total" value={activeSummary.total} />
         <StatCard icon={Activity} label="checked" value={activeSummary.checked} />
         <StatCard icon={CheckCircle2} label="normal" value={activeSummary.normal} />
+        <StatCard icon={ExternalLink} label="candidate" value={activeSummary.candidate_detected} />
         <StatCard icon={ExternalLink} label="redirected" value={activeSummary.redirected} />
         <StatCard icon={ShieldAlert} label="restricted" value={activeSummary.restricted} />
         <StatCard icon={ShieldAlert} label="challenge" value={activeSummary.challenge} />
+        <StatCard icon={AlertTriangle} label="latest_unknown" value={activeSummary.latest_unknown} />
         <StatCard icon={AlertTriangle} label="down" value={activeSummary.down} />
         <StatCard icon={AlertTriangle} label="timeout" value={activeSummary.timeout} />
         <StatCard icon={AlertTriangle} label="server_error" value={activeSummary.server_error} />
@@ -667,6 +697,13 @@ export default function LinkCheckManager({ onEditSite }: LinkCheckManagerProps) 
                             className="rounded-lg border border-obsidian-500 px-2 py-1 text-[11px] font-bold text-slate-200 hover:bg-obsidian-700 disabled:opacity-50"
                           >
                             재점검
+                          </button>
+                          <button
+                            onClick={() => void setManualCandidate(row)}
+                            disabled={Boolean(running)}
+                            className="rounded-lg border border-amber-500/30 px-2 py-1 text-[11px] font-bold text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+                          >
+                            후보 URL 수동 입력
                           </button>
                           {isManualBrowserCheckStatus(row.check_status) && browserCheckUrl && (
                             <a

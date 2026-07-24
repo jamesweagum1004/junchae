@@ -623,8 +623,238 @@ function isRestrictedContent(text, finalUrl) {
   );
 }
 
+const linkProblemStatuses = [
+  'candidate_detected',
+  'redirected',
+  'challenge',
+  'restricted',
+  'latest_unknown',
+  'down',
+  'timeout',
+  'server_error',
+  'unknown',
+];
+
+function isProblemLinkStatus(status) {
+  return linkProblemStatuses.includes(String(status || '').trim().toLowerCase());
+}
+
+function isConnectionResetError(err) {
+  const text = [
+    err?.code,
+    err?.cause?.code,
+    err?.name,
+    err?.message,
+    err?.cause?.message,
+  ].filter(Boolean).join(' ').toLowerCase();
+  return (
+    text.includes('econnreset') ||
+    text.includes('err_connection_reset') ||
+    text.includes('socket hang up') ||
+    text.includes('connection reset') ||
+    text.includes('reset by peer')
+  );
+}
+
+function classifyLinkResponse({ httpStatus, sample, headers, checkedUrl, finalUrl }) {
+  const originalDomain = domainFromUrl(checkedUrl);
+  const finalDomain = domainFromUrl(finalUrl);
+  const candidateNewUrl = finalDomain && originalDomain && finalDomain !== originalDomain ? finalUrl : null;
+  let checkStatus = 'unknown';
+
+  if (isCloudflareChallenge(httpStatus, sample, headers)) {
+    checkStatus = 'challenge';
+  } else if (isRestrictedContent(sample, finalUrl)) {
+    checkStatus = 'restricted';
+  } else if (candidateNewUrl) {
+    checkStatus = 'redirected';
+  } else if (httpStatus >= 200 && httpStatus <= 299) {
+    checkStatus = 'normal';
+  } else if (httpStatus === 403) {
+    checkStatus = 'restricted';
+  } else if (httpStatus === 404 || httpStatus === 410) {
+    checkStatus = 'down';
+  } else if (httpStatus >= 500) {
+    checkStatus = 'server_error';
+  } else if (httpStatus >= 300 && httpStatus <= 399) {
+    checkStatus = candidateNewUrl ? 'redirected' : 'unknown';
+  }
+
+  return {
+    check_status: checkStatus,
+    candidate_new_url: candidateNewUrl,
+    original_domain: originalDomain,
+    final_domain: finalDomain,
+  };
+}
+
+function rootDomain(hostname) {
+  const labels = String(hostname || '').toLowerCase().replace(/^www\./, '').split('.').filter(Boolean);
+  if (labels.length <= 2) return labels.join('.');
+  return labels.slice(-2).join('.');
+}
+
+function numberedDomainPattern(urlValue) {
+  const parsed = parseHttpUrl(urlValue);
+  if (!parsed) return null;
+  const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const match = hostname.match(/^(.*?)(\d+)(\..+)$/);
+  if (!match) return null;
+  const number = Number(match[2]);
+  if (!Number.isFinite(number)) return null;
+  return {
+    parsed,
+    prefix: match[1],
+    number,
+    suffix: match[3],
+  };
+}
+
+function numberedDomainCandidates(urlValue, count = 5) {
+  const pattern = numberedDomainPattern(urlValue);
+  if (!pattern) return [];
+  return Array.from({ length: count }, (_, index) => {
+    const nextNumber = pattern.number + index + 1;
+    const next = new URL(pattern.parsed.toString());
+    next.hostname = `${pattern.prefix}${nextNumber}${pattern.suffix}`;
+    return normalizeHttpUrl(next.toString());
+  });
+}
+
+function isSameNumberedDomainFamily(currentUrl, candidateUrl) {
+  const current = numberedDomainPattern(currentUrl);
+  const candidate = numberedDomainPattern(candidateUrl);
+  if (!current || !candidate) return false;
+  return current.prefix === candidate.prefix && current.suffix === candidate.suffix && candidate.number > current.number;
+}
+
+function isIgnoredCandidateUrl(urlValue) {
+  const parsed = parseHttpUrl(urlValue);
+  if (!parsed) return true;
+  const host = parsed.hostname.toLowerCase();
+  const path = parsed.pathname.toLowerCase();
+  return (
+    host.includes('cloudflare') ||
+    host.includes('google') ||
+    host.includes('gstatic') ||
+    host.includes('googletagmanager') ||
+    host.includes('google-analytics') ||
+    host.includes('analytics') ||
+    host.includes('doubleclick') ||
+    host.includes('ads') ||
+    /\.(png|jpe?g|gif|webp|svg|ico|css|js|woff2?|ttf|mp4|webm|zip|rar|7z|pdf)$/i.test(path)
+  );
+}
+
+function extractBodyCandidateUrls(sample, baseUrl) {
+  const html = String(sample || '');
+  if (!html) return [];
+  const candidates = new Set();
+  const patterns = [
+    /<link[^>]+rel=["']canonical["'][^>]+href=["']([^"']+)["']/gi,
+    /<meta[^>]+property=["']og:url["'][^>]+content=["']([^"']+)["']/gi,
+    /<meta[^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=([^"';]+)[^"']*["']/gi,
+    /(?:location\.href|window\.location(?:\.href)?)\s*=\s*["']([^"']+)["']/gi,
+    /<a[^>]+href=["']([^"']+)["']/gi,
+    /https?:\/\/[^\s"'<>\\)]+/gi,
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(html)) !== null) {
+      const raw = String(match[1] || match[0] || '').trim();
+      try {
+        const resolved = normalizeHttpUrl(new URL(raw, baseUrl).toString());
+        if (resolved && !isIgnoredCandidateUrl(resolved)) candidates.add(resolved);
+      } catch {
+        // Ignore unparsable body links.
+      }
+    }
+  }
+  return [...candidates].slice(0, 20);
+}
+
+function pickRelatedBodyCandidate(currentUrl, sample) {
+  const current = parseHttpUrl(currentUrl);
+  if (!current) return null;
+  const currentHost = current.hostname.toLowerCase().replace(/^www\./, '');
+  const currentRoot = rootDomain(currentHost);
+  for (const candidate of extractBodyCandidateUrls(sample, currentUrl)) {
+    const parsed = parseHttpUrl(candidate);
+    if (!parsed) continue;
+    const candidateHost = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    if (
+      candidateHost === currentHost ||
+      rootDomain(candidateHost) === currentRoot ||
+      isSameNumberedDomainFamily(currentUrl, candidate)
+    ) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+async function readResponseSample(response) {
+  const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+  if (contentType.includes('text') || contentType.includes('html') || contentType.includes('json') || contentType.includes('xml')) {
+    return (await response.text()).slice(0, 250000);
+  }
+  return '';
+}
+
+async function probeUrlCandidate(candidateUrl, currentStatus) {
+  try {
+    const { response, finalUrl: responseFinalUrl } = await fetchPublicUrlWithTimeout(candidateUrl, 9000);
+    const finalUrl = normalizeHttpUrl(responseFinalUrl || response.url || candidateUrl);
+    const httpStatus = Number(response.status) || null;
+    const sample = await readResponseSample(response);
+    const classified = classifyLinkResponse({
+      httpStatus,
+      sample,
+      headers: response.headers,
+      checkedUrl: candidateUrl,
+      finalUrl,
+    });
+    const status = classified.check_status;
+    if (
+      status === 'normal' ||
+      status === 'redirected' ||
+      (isProblemLinkStatus(currentStatus) && ['challenge', 'restricted'].includes(status))
+    ) {
+      return {
+        url: candidateUrl,
+        final_url: finalUrl,
+        http_status: httpStatus,
+        check_status: status,
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+async function detectLatestUrlCandidate({ checkedUrl, sample, currentStatus }) {
+  const bodyCandidate = pickRelatedBodyCandidate(checkedUrl, sample);
+  if (bodyCandidate && bodyCandidate !== checkedUrl) {
+    const probe = await probeUrlCandidate(bodyCandidate, currentStatus);
+    if (probe) return { url: bodyCandidate, source: 'body', probe };
+  }
+
+  for (const candidateUrl of numberedDomainCandidates(checkedUrl, 5)) {
+    const probe = await probeUrlCandidate(candidateUrl, currentStatus);
+    if (probe) return { url: candidateUrl, source: 'numbered_domain', probe };
+  }
+  return null;
+}
+
 function linkStatusMemo(result) {
   const status = result.check_status;
+  if (status === 'candidate_detected') {
+    return `새 주소 후보 ${result.candidate_new_url || ''} 가 감지되었습니다. 관리자 확인 후 적용하세요.`;
+  }
+  if (status === 'latest_unknown') {
+    return '연결 제한 또는 재설정으로 최신 주소를 확정하지 못했습니다. 주소 변경 가능성이 있으므로 확인이 필요합니다.';
+  }
   const code = result.http_status ? `HTTP ${result.http_status}` : 'HTTP 상태 없음';
   const finalUrl = result.final_url && result.final_url !== result.checked_url ? ` 최종 URL: ${result.final_url}` : '';
   if (status === 'normal') return `${code}. 정상 응답입니다.${finalUrl}`;
@@ -736,6 +966,105 @@ async function checkSiteLink(site) {
   }
 }
 
+async function checkSiteLinkImproved(site) {
+  const checkedUrl = normalizeHttpUrl(site.url);
+  if (!checkedUrl) {
+    return {
+      site_id: site.id,
+      checked_url: site.url || '',
+      http_status: null,
+      check_status: 'unknown',
+      final_url: null,
+      candidate_new_url: null,
+      status_memo: '유효한 http/https URL이 아닙니다.',
+    };
+  }
+
+  try {
+    const response = await fetchWithTimeout(checkedUrl);
+    const finalUrl = normalizeHttpUrl(response.url || checkedUrl);
+    const httpStatus = Number(response.status) || null;
+    const sample = await readResponseSample(response);
+    const classified = classifyLinkResponse({
+      httpStatus,
+      sample,
+      headers: response.headers,
+      checkedUrl,
+      finalUrl,
+    });
+
+    let checkStatus = classified.check_status;
+    let candidateNewUrl = classified.candidate_new_url;
+    let candidateSource = candidateNewUrl ? 'redirect' : '';
+    if (candidateNewUrl) checkStatus = 'candidate_detected';
+
+    if (!candidateNewUrl && isProblemLinkStatus(checkStatus)) {
+      const detectedCandidate = await detectLatestUrlCandidate({ checkedUrl, sample, currentStatus: checkStatus });
+      if (detectedCandidate?.url) {
+        candidateNewUrl = detectedCandidate.url;
+        candidateSource = detectedCandidate.source;
+        checkStatus = 'candidate_detected';
+      }
+    }
+
+    const result = {
+      site_id: site.id,
+      checked_url: checkedUrl,
+      http_status: httpStatus,
+      check_status: checkStatus,
+      final_url: finalUrl,
+      candidate_new_url: candidateNewUrl,
+      original_domain: classified.original_domain,
+      final_domain: classified.final_domain,
+    };
+
+    if (checkStatus === 'candidate_detected' && candidateNewUrl) {
+      const sourceText = candidateSource === 'numbered_domain' ? '번호형 도메인 패턴' : candidateSource === 'body' ? '본문/메타 URL 분석' : '리다이렉트';
+      return {
+        ...result,
+        status_memo: `${sourceText}에서 새 주소 후보 ${candidateNewUrl} 가 감지되었습니다. 관리자 확인 후 적용하세요.`,
+      };
+    }
+
+    return {
+      ...result,
+      status_memo: appendDomainChangeMemo(linkStatusMemo(result), result),
+    };
+  } catch (err) {
+    const isTimeout = err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('abort');
+    const isReset = isConnectionResetError(err);
+    const detectedCandidate = isTimeout
+      ? null
+      : await detectLatestUrlCandidate({ checkedUrl, sample: '', currentStatus: 'latest_unknown' });
+
+    if (detectedCandidate?.url) {
+      return {
+        site_id: site.id,
+        checked_url: checkedUrl,
+        http_status: null,
+        check_status: 'candidate_detected',
+        final_url: null,
+        candidate_new_url: detectedCandidate.url,
+        status_memo: `번호형 도메인 패턴에서 새 주소 후보 ${detectedCandidate.url} 가 감지되었습니다. 관리자 확인 후 적용하세요.`,
+      };
+    }
+
+    return {
+      site_id: site.id,
+      checked_url: checkedUrl,
+      http_status: null,
+      check_status: isTimeout ? 'timeout' : isReset ? 'latest_unknown' : 'unknown',
+      final_url: null,
+      candidate_new_url: null,
+      status_memo: isTimeout
+        ? '15초 안에 응답하지 않아 timeout으로 기록했습니다.'
+        : isReset
+          ? '연결이 재설정되어 최신 주소를 확인하지 못했습니다. 주소 변경 가능성이 있으므로 확인이 필요합니다.'
+          : `요청 오류: ${err?.message || 'unknown error'}`,
+    };
+  }
+}
+
 async function checkPublicUrlStatus(inputUrl) {
   const checkedUrl = await assertPublicHttpUrl(inputUrl);
   try {
@@ -812,7 +1141,7 @@ function nextDownCount(currentDownCount, result) {
   if (result.check_status === 'restricted') {
     return Number(result.http_status) === 403 ? current + 1 : current;
   }
-  if (['down', 'timeout', 'server_error', 'unknown'].includes(result.check_status)) return current + 1;
+  if (['down', 'timeout', 'server_error', 'latest_unknown', 'unknown'].includes(result.check_status)) return current + 1;
   return current;
 }
 
@@ -2806,7 +3135,7 @@ app.post('/api/admin/sites/:id/check-link', requireAdminToken, asyncRoute(async 
   const site = await getSiteById(id);
   if (!site) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
 
-  const result = await checkSiteLink(site);
+  const result = await checkSiteLinkImproved(site);
   const saved = await saveSiteCheckResult(site, result);
   const data = {
     site_id: id,
@@ -2848,9 +3177,11 @@ app.post('/api/admin/sites/check-links', requireAdminToken, asyncRoute(async (re
     total: sites.length,
     checked: 0,
     normal: 0,
+    candidate_detected: 0,
     redirected: 0,
     restricted: 0,
     challenge: 0,
+    latest_unknown: 0,
     down: 0,
     timeout: 0,
     server_error: 0,
@@ -2859,7 +3190,7 @@ app.post('/api/admin/sites/check-links', requireAdminToken, asyncRoute(async (re
 
   for (const [index, site] of sites.entries()) {
     if (index > 0) await sleep(randomDelayMs());
-    const result = await checkSiteLink(site);
+    const result = await checkSiteLinkImproved(site);
     const saved = await saveSiteCheckResult(site, result);
     summary.checked += 1;
     if (Object.prototype.hasOwnProperty.call(summary, saved.check_status)) {
@@ -2918,7 +3249,7 @@ app.get('/api/admin/sites/link-check-report', requireAdminToken, asyncRoute(asyn
   }
   const status = normalizeSafeKey(req.query.status);
   if (status === 'problem') {
-    clauses.push(`s.check_status IN ('down','timeout','restricted','server_error','redirected','challenge','unknown')`);
+    clauses.push(`s.check_status IN ('candidate_detected','redirected','challenge','restricted','latest_unknown','down','timeout','server_error','unknown')`);
   } else if (status) {
     clauses.push('s.check_status = ?');
     values.push(status);
@@ -3022,12 +3353,56 @@ app.post('/api/admin/sites/link-check-dismiss', requireAdminToken, asyncRoute(as
   });
 }));
 
+app.patch('/api/admin/sites/:id/candidate-url', requireAdminToken, asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  let candidateUrl;
+  try {
+    candidateUrl = normalizeHttpUrl(await assertPublicHttpUrl(req.body?.candidate_new_url || req.body?.url));
+  } catch (err) {
+    const status = err?.code === 'BLOCKED_URL' || err?.code === 'INVALID_URL' ? 400 : 500;
+    return jsonError(res, status, err?.code || 'INVALID_URL', err?.message || 'A valid public http or https URL is required.');
+  }
+
+  const site = await getSiteById(id);
+  if (!site) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+
+  const memo = '관리자가 새 주소 후보를 수동 등록했습니다.';
+  await db.execute(
+    `UPDATE sites
+     SET candidate_new_url = ?,
+         check_status = 'candidate_detected',
+         status_memo = ?,
+         last_checked_at = NOW(),
+         link_check_dismissed = 0,
+         link_check_dismissed_at = NULL,
+         link_check_dismissed_reason = NULL
+     WHERE id = ?`,
+    [candidateUrl, memo, id]
+  );
+  await db.execute(
+    `INSERT INTO site_check_logs
+     (site_id, checked_url, http_status, check_status, final_url, candidate_new_url, memo)
+     VALUES (?, ?, NULL, 'candidate_detected', NULL, ?, ?)`,
+    [id, site.url, candidateUrl, memo]
+  );
+
+  const updated = await getSiteById(id);
+  return res.json({ ok: true, data: updated });
+}));
+
 app.patch('/api/admin/sites/:id/url', requireAdminToken, asyncRoute(async (req, res) => {
   const id = parseId(req.params.id);
   if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
 
-  const nextUrl = normalizeHttpUrl(req.body?.url);
-  if (!nextUrl) return jsonError(res, 400, 'INVALID_URL', 'A valid http or https URL is required.');
+  let nextUrl;
+  try {
+    nextUrl = normalizeHttpUrl(await assertPublicHttpUrl(req.body?.url));
+  } catch (err) {
+    const status = err?.code === 'BLOCKED_URL' || err?.code === 'INVALID_URL' ? 400 : 500;
+    return jsonError(res, status, err?.code || 'INVALID_URL', err?.message || 'A valid public http or https URL is required.');
+  }
 
   const site = await getSiteById(id);
   if (!site) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
@@ -3041,7 +3416,7 @@ app.patch('/api/admin/sites/:id/url', requireAdminToken, asyncRoute(async (req, 
      SET url = ?,
          final_url = ?,
          candidate_new_url = NULL,
-         check_status = 'normal',
+          check_status = 'unchecked',
          http_status = NULL,
          down_count = 0,
          status_memo = ?,
@@ -3052,7 +3427,7 @@ app.patch('/api/admin/sites/:id/url', requireAdminToken, asyncRoute(async (req, 
   await db.execute(
     `INSERT INTO site_check_logs
      (site_id, checked_url, http_status, check_status, final_url, candidate_new_url, memo)
-     VALUES (?, ?, NULL, 'normal', ?, NULL, ?)`,
+      VALUES (?, ?, NULL, 'unchecked', ?, NULL, ?)`,
     [id, previousUrl, nextUrl, memo]
   );
 
@@ -3261,10 +3636,10 @@ app.get('/api/sites/recent-status', asyncRoute(async (req, res) => {
   const limit = clampInt(req.query.limit, 1, 20, 8);
   const [recentNormal, recentChanged, recentProblem] = await Promise.all([
     queryRecentStatusSites(mode, `(s.check_status = 'normal' OR s.status IN ('normal','active','정상','?뺤긽'))`, limit),
-    queryRecentStatusSites(mode, `(s.candidate_new_url IS NOT NULL OR s.check_status = 'redirected')`, limit),
+    queryRecentStatusSites(mode, `(s.candidate_new_url IS NOT NULL OR s.check_status IN ('redirected','candidate_detected'))`, limit),
     queryRecentStatusSites(
       mode,
-      `(s.check_status IN ('down','timeout','restricted','server_error','challenge','unknown')
+      `(s.check_status IN ('candidate_detected','down','timeout','restricted','server_error','challenge','latest_unknown','unknown')
         OR s.status IN ('down','offline','slow','접속불가','?묒냽遺덇?'))`,
       limit
     ),
@@ -3284,10 +3659,10 @@ app.get('/api/sites/updates', asyncRoute(async (req, res) => {
   const mode = normalizeMode(req.query.mode);
   const limit = clampInt(req.query.limit, 1, 50, 20);
   const [recentChanged, recentProblem, recentNormal, recentAdded] = await Promise.all([
-    queryRecentStatusSites(mode, `(s.candidate_new_url IS NOT NULL OR s.check_status = 'redirected')`, limit),
+    queryRecentStatusSites(mode, `(s.candidate_new_url IS NOT NULL OR s.check_status IN ('redirected','candidate_detected'))`, limit),
     queryRecentStatusSites(
       mode,
-      `(s.check_status IN ('down','timeout','restricted','server_error','challenge','unknown')
+      `(s.check_status IN ('candidate_detected','down','timeout','restricted','server_error','challenge','latest_unknown','unknown')
         OR s.status IN ('down','offline','slow','접속불가','?묒냽遺덇?'))`,
       limit
     ),

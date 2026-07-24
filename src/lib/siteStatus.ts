@@ -69,12 +69,22 @@ export const normalizeCheckStatus = (value: unknown) => String(value || '').trim
 
 export const isRedirectedStatus = (value: unknown, candidateNewUrl?: unknown) => {
   const status = normalizeCheckStatus(value);
-  return status === 'redirected' || Boolean(String(candidateNewUrl || '').trim());
+  return status === 'redirected' || status === 'candidate_detected' || Boolean(String(candidateNewUrl || '').trim());
 };
 
 export const isProblemStatus = (checkStatus?: unknown, siteStatus?: unknown) => {
   const status = normalizeCheckStatus(checkStatus);
-  if (['down', 'timeout', 'restricted', 'server_error', 'challenge', 'unknown'].includes(status)) return true;
+  if ([
+    'candidate_detected',
+    'redirected',
+    'down',
+    'timeout',
+    'restricted',
+    'server_error',
+    'challenge',
+    'latest_unknown',
+    'unknown',
+  ].includes(status)) return true;
   return normalizeSiteStatus(siteStatus) === 'down';
 };
 
@@ -82,12 +92,14 @@ export const getCheckStatusLabel = (value: unknown) => {
   const status = normalizeCheckStatus(value);
   const labels: Record<string, string> = {
     normal: '정상 확인',
-    redirected: '주소 변경 감지',
+    redirected: '리다이렉트 감지',
+    candidate_detected: '새 주소 후보 감지',
     restricted: '접근 제한',
     challenge: '자동 확인 제한',
-    down: '확인 필요',
-    timeout: '확인 필요',
-    server_error: '확인 필요',
+    latest_unknown: '최신 주소 확인 필요',
+    down: '접속 불가',
+    timeout: '시간 초과',
+    server_error: '서버 오류',
     unknown: '확인 필요',
     unchecked: '미점검',
   };
@@ -102,7 +114,10 @@ export const getCheckStatusBadgeClass = (value: unknown, isSecure = false) => {
   if (status === 'redirected') return isSecure
     ? 'border-sky-500/30 bg-sky-500/10 text-sky-300'
     : 'border-sky-200 bg-sky-50 text-sky-700';
-  if (status === 'restricted' || status === 'challenge') return isSecure
+  if (status === 'candidate_detected') return isSecure
+    ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+    : 'border-amber-200 bg-amber-50 text-amber-700';
+  if (status === 'restricted' || status === 'challenge' || status === 'latest_unknown') return isSecure
     ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
     : 'border-amber-200 bg-amber-50 text-amber-700';
   if (status === 'down' || status === 'timeout' || status === 'server_error') return isSecure
@@ -118,8 +133,10 @@ export const calculateSiteStatusScore = (site: { check_status?: unknown; status?
   const baseByCheckStatus: Record<string, number> = {
     normal: 100,
     redirected: 80,
+    candidate_detected: 60,
     challenge: 70,
     restricted: 50,
+    latest_unknown: 45,
     server_error: 45,
     timeout: 35,
     down: 20,
