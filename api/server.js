@@ -144,6 +144,9 @@ const siteColumns = [
   'http_status',
   'final_url',
   'candidate_new_url',
+  'rejected_candidate_url',
+  'rejected_candidate_at',
+  'candidate_review_memo',
   'down_count',
   'status_memo',
   'check_status',
@@ -847,10 +850,23 @@ async function detectLatestUrlCandidate({ checkedUrl, sample, currentStatus }) {
   return null;
 }
 
+function sameNormalizedUrl(left, right) {
+  const leftUrl = normalizeHttpUrl(left);
+  const rightUrl = normalizeHttpUrl(right);
+  return Boolean(leftUrl && rightUrl && leftUrl === rightUrl);
+}
+
+function isRejectedCandidate(site, candidateUrl) {
+  return sameNormalizedUrl(site?.rejected_candidate_url, candidateUrl);
+}
+
 function linkStatusMemo(result) {
   const status = result.check_status;
   if (status === 'candidate_detected') {
     return `새 주소 후보 ${result.candidate_new_url || ''} 가 감지되었습니다. 관리자 확인 후 적용하세요.`;
+  }
+  if (status === 'candidate_dismissed' || status === 'candidate_rejected') {
+    return '관리자가 새 주소 후보를 후보 아님으로 종결했습니다.';
   }
   if (status === 'latest_unknown') {
     return '연결 제한 또는 재설정으로 최신 주소를 확정하지 못했습니다. 주소 변경 가능성이 있으므로 확인이 필요합니다.';
@@ -996,11 +1012,16 @@ async function checkSiteLinkImproved(site) {
     let checkStatus = classified.check_status;
     let candidateNewUrl = classified.candidate_new_url;
     let candidateSource = candidateNewUrl ? 'redirect' : '';
+    if (isRejectedCandidate(site, candidateNewUrl)) {
+      candidateNewUrl = null;
+      candidateSource = '';
+      checkStatus = 'candidate_dismissed';
+    }
     if (candidateNewUrl) checkStatus = 'candidate_detected';
 
     if (!candidateNewUrl && isProblemLinkStatus(checkStatus)) {
       const detectedCandidate = await detectLatestUrlCandidate({ checkedUrl, sample, currentStatus: checkStatus });
-      if (detectedCandidate?.url) {
+      if (detectedCandidate?.url && !isRejectedCandidate(site, detectedCandidate.url)) {
         candidateNewUrl = detectedCandidate.url;
         candidateSource = detectedCandidate.source;
         checkStatus = 'candidate_detected';
@@ -1038,6 +1059,17 @@ async function checkSiteLinkImproved(site) {
       : await detectLatestUrlCandidate({ checkedUrl, sample: '', currentStatus: 'latest_unknown' });
 
     if (detectedCandidate?.url) {
+      if (isRejectedCandidate(site, detectedCandidate.url)) {
+        return {
+          site_id: site.id,
+          checked_url: checkedUrl,
+          http_status: null,
+          check_status: isReset ? 'latest_unknown' : 'unknown',
+          final_url: null,
+          candidate_new_url: null,
+          status_memo: '이전에 후보 아님으로 종결된 URL이 다시 감지되어 후보 저장을 건너뛰었습니다.',
+        };
+      }
       return {
         site_id: site.id,
         checked_url: checkedUrl,
@@ -1804,7 +1836,10 @@ async function initializeDatabase() {
   await ensureColumn('sites', 'http_status', 'INT NULL', 'last_checked_at');
   await ensureColumn('sites', 'final_url', 'VARCHAR(500) NULL', 'http_status');
   await ensureColumn('sites', 'candidate_new_url', 'VARCHAR(500) NULL', 'final_url');
-  await ensureColumn('sites', 'down_count', 'INT NOT NULL DEFAULT 0', 'candidate_new_url');
+  await ensureColumn('sites', 'rejected_candidate_url', 'VARCHAR(500) NULL', 'candidate_new_url');
+  await ensureColumn('sites', 'rejected_candidate_at', 'DATETIME NULL', 'rejected_candidate_url');
+  await ensureColumn('sites', 'candidate_review_memo', 'TEXT NULL', 'rejected_candidate_at');
+  await ensureColumn('sites', 'down_count', 'INT NOT NULL DEFAULT 0', 'candidate_review_memo');
   await ensureColumn('sites', 'status_memo', 'TEXT NULL', 'down_count');
   await ensureColumn('sites', 'check_status', 'VARCHAR(50) NULL', 'status_memo');
   await ensureColumn('sites', 'link_check_dismissed', 'TINYINT(1) NOT NULL DEFAULT 0', 'check_status');
@@ -3372,6 +3407,9 @@ app.patch('/api/admin/sites/:id/candidate-url', requireAdminToken, asyncRoute(as
   await db.execute(
     `UPDATE sites
      SET candidate_new_url = ?,
+         rejected_candidate_url = NULL,
+         rejected_candidate_at = NULL,
+         candidate_review_memo = NULL,
          check_status = 'candidate_detected',
          status_memo = ?,
          last_checked_at = NOW(),
@@ -3386,6 +3424,44 @@ app.patch('/api/admin/sites/:id/candidate-url', requireAdminToken, asyncRoute(as
      (site_id, checked_url, http_status, check_status, final_url, candidate_new_url, memo)
      VALUES (?, ?, NULL, 'candidate_detected', NULL, ?, ?)`,
     [id, site.url, candidateUrl, memo]
+  );
+
+  const updated = await getSiteById(id);
+  return res.json({ ok: true, data: updated });
+}));
+
+app.patch('/api/admin/sites/:id/candidate-url/dismiss', requireAdminToken, asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const site = await getSiteById(id);
+  if (!site) return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+  if (!site.candidate_new_url) return jsonError(res, 400, 'NO_CANDIDATE_URL', 'No candidate_new_url exists for this site.');
+
+  const rejectedUrl = site.candidate_new_url;
+  const rawReviewMemo = normalizeOptionalText(req.body?.memo || req.body?.reason);
+  const reviewMemo = typeof rawReviewMemo === 'string' ? rawReviewMemo.slice(0, 500) : '';
+  const memo = reviewMemo
+    ? `관리자가 새 주소 후보를 후보 아님으로 종결했습니다. ${reviewMemo}`
+    : '관리자가 새 주소 후보를 후보 아님으로 종결했습니다.';
+
+  await db.execute(
+    `UPDATE sites
+     SET rejected_candidate_url = ?,
+         rejected_candidate_at = NOW(),
+         candidate_review_memo = ?,
+         candidate_new_url = NULL,
+         check_status = 'candidate_dismissed',
+         status_memo = ?,
+         last_checked_at = NOW()
+     WHERE id = ?`,
+    [rejectedUrl, reviewMemo || null, memo, id]
+  );
+  await db.execute(
+    `INSERT INTO site_check_logs
+     (site_id, checked_url, http_status, check_status, final_url, candidate_new_url, memo)
+     VALUES (?, ?, NULL, 'candidate_dismissed', NULL, ?, ?)`,
+    [id, site.url, rejectedUrl, memo]
   );
 
   const updated = await getSiteById(id);
@@ -3414,8 +3490,11 @@ app.patch('/api/admin/sites/:id/url', requireAdminToken, asyncRoute(async (req, 
   await db.execute(
     `UPDATE sites
      SET url = ?,
-         final_url = ?,
-         candidate_new_url = NULL,
+          final_url = ?,
+          candidate_new_url = NULL,
+          rejected_candidate_url = NULL,
+          rejected_candidate_at = NULL,
+          candidate_review_memo = NULL,
           check_status = 'unchecked',
          http_status = NULL,
          down_count = 0,

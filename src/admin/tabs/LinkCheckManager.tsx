@@ -23,6 +23,9 @@ type LinkCheckRow = {
   http_status?: number | null;
   final_url?: string | null;
   candidate_new_url?: string | null;
+  rejected_candidate_url?: string | null;
+  rejected_candidate_at?: string | null;
+  candidate_review_memo?: string | null;
   down_count?: number;
   last_checked_at?: string | null;
   status_memo?: string | null;
@@ -389,6 +392,27 @@ export default function LinkCheckManager({ onEditSite }: LinkCheckManagerProps) 
     }
   };
 
+  const dismissCandidate = async (row: LinkCheckRow) => {
+    if (!row.candidate_new_url) return;
+    const memo = window.prompt('후보 아님 처리 사유를 입력하세요.', '다른 사이트 URL이라 후보 아님');
+    if (memo === null) return;
+    setRunning(`dismiss-candidate-${row.id}`);
+    setNotice('');
+    setError('');
+    try {
+      await apiJson<LinkCheckRow>(`/api/admin/sites/${row.id}/candidate-url/dismiss`, {
+        method: 'PATCH',
+        body: JSON.stringify({ memo }),
+      });
+      setNotice('새 URL 후보를 후보 아님으로 종결했습니다.');
+      await loadReport(mode, categorySlug, displayFilter);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '새 URL 후보 종결에 실패했습니다.');
+    } finally {
+      setRunning('');
+    }
+  };
+
   const removeRowsFromCurrentReport = (ids: number[]) => {
     const idSet = new Set(ids);
     setReport((current) => ({ ...current, rows: current.rows.filter((row) => !idSet.has(row.id)) }));
@@ -731,6 +755,13 @@ export default function LinkCheckManager({ onEditSite }: LinkCheckManagerProps) 
                                 className="rounded-lg border border-emerald-500/30 px-2 py-1 text-[11px] font-bold text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
                               >
                                 새 URL 후보 적용
+                              </button>
+                              <button
+                                onClick={() => void dismissCandidate(row)}
+                                disabled={Boolean(running)}
+                                className="rounded-lg border border-slate-500/30 px-2 py-1 text-[11px] font-bold text-slate-300 hover:bg-slate-500/10 disabled:opacity-50"
+                              >
+                                후보 아님
                               </button>
                             </>
                           )}

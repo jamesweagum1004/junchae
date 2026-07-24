@@ -43,6 +43,19 @@ const safeDecode = (value: string) => {
   }
 };
 
+const formatPublicCheckDate = (value?: string | null) => {
+  if (!value) return '확인일 정보 없음';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '확인일 정보 없음';
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDiff = Math.round((startOfToday - startOfDate) / 86400000);
+  if (dayDiff === 0) return '오늘 확인';
+  if (dayDiff === 1) return '어제 확인';
+  return `${date.getFullYear()}. ${date.getMonth() + 1}. ${date.getDate()}. 확인`;
+};
+
 type FaqItem = {
   question: string;
   answer: string;
@@ -104,6 +117,7 @@ export default function SitePage() {
   const { flags } = useFeatureFlags();
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
   const [checkHistory, setCheckHistory] = useState<CheckHistoryItem[]>([]);
+  const [timelineExpanded, setTimelineExpanded] = useState(false);
   const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedSite[]>([]);
 
   const siteParam = useMemo(() => safeDecode(location.pathname.replace(/^\/site\/?/, '')), [location.pathname]);
@@ -186,7 +200,7 @@ export default function SitePage() {
     : false;
   const timelineItems = useMemo<CheckHistoryItem[]>(() => {
     if (!site) return [];
-    if (checkHistory.length > 0) return checkHistory.slice(0, 5);
+    if (checkHistory.length > 0) return checkHistory;
     return [{
       created_at: site.last_checked_at || null,
       check_status: site.check_status || null,
@@ -197,6 +211,7 @@ export default function SitePage() {
       memo: site.status_memo || '현재 사이트 상태 기준 기록입니다.',
     }];
   }, [checkHistory, site]);
+  const visibleTimelineItems = timelineExpanded ? timelineItems : timelineItems.slice(0, 3);
 
   useEffect(() => {
     if (!site) return;
@@ -226,13 +241,17 @@ export default function SitePage() {
 
   useEffect(() => {
     if (!site || !flags.show_site_check_timeline) return;
-    fetch(`/api/sites/${site.id}/check-history?limit=5`)
+    fetch(`/api/sites/${site.id}/check-history?limit=20`)
       .then((res) => res.json())
       .then((body) => {
         if (body?.ok && Array.isArray(body.data)) setCheckHistory(body.data);
       })
       .catch((err) => console.error('Site check history load failed', err));
   }, [flags.show_site_check_timeline, site]);
+
+  useEffect(() => {
+    setTimelineExpanded(false);
+  }, [site?.id]);
 
   useEffect(() => {
     if (!site || !flags.show_recently_viewed_sites) return;
@@ -504,7 +523,7 @@ export default function SitePage() {
                       </h2>
                     </div>
                     <div className="mt-4 space-y-3">
-                      {timelineItems.map((item, index) => {
+                      {visibleTimelineItems.map((item, index) => {
                         const checkStatus = normalizeCheckStatus(item.check_status || site.check_status || site.status);
                         return (
                           <div key={item.id || index} className={`rounded-xl border p-4 ${isSecure ? 'border-white/[0.06] bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
@@ -513,7 +532,7 @@ export default function SitePage() {
                                 {getCheckStatusLabel(checkStatus)}
                               </span>
                               <span className={`inline-flex items-center gap-1 text-xs ${isSecure ? 'text-slate-500' : 'text-slate-500'}`}>
-                                <Clock size={12} /> {formatDateTime(item.created_at)}
+                                <Clock size={12} /> {formatPublicCheckDate(item.created_at)}
                               </span>
                               <span className={`text-xs font-mono ${isSecure ? 'text-slate-500' : 'text-slate-500'}`}>HTTP {item.http_status || '-'}</span>
                             </div>
@@ -527,6 +546,24 @@ export default function SitePage() {
                         );
                       })}
                     </div>
+                    {timelineItems.length > 3 && (
+                      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <span className={`text-xs ${isSecure ? 'text-slate-500' : 'text-slate-500'}`}>
+                          총 {timelineItems.length}개 기록 중 {visibleTimelineItems.length}개 표시
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setTimelineExpanded((current) => !current)}
+                          className={`rounded-lg border px-3 py-2 text-xs font-bold transition-colors ${
+                            isSecure
+                              ? 'border-white/[0.08] text-slate-300 hover:bg-white/[0.05] hover:text-white'
+                              : 'border-slate-200 text-slate-700 hover:bg-white'
+                          }`}
+                        >
+                          {timelineExpanded ? '접기' : `${timelineItems.length - 3}개 기록 더보기`}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

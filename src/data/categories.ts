@@ -48,6 +48,9 @@ export interface Site {
   http_status?: number | null;
   final_url?: string | null;
   candidate_new_url?: string | null;
+  rejected_candidate_url?: string | null;
+  rejected_candidate_at?: string | null;
+  candidate_review_memo?: string | null;
   down_count?: number;
   status_memo?: string | null;
   check_status?: string | null;
