@@ -1,8 +1,11 @@
 import { Zap, Shield, Lock } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
+import { useFeatureFlags } from '../context/FeatureFlagsContext';
 
 export default function Header() {
   const { isSecure, setMode } = useTheme();
+  const { flags } = useFeatureFlags();
 
   return (
     <header
@@ -40,6 +43,29 @@ export default function Header() {
         </div>
 
         {/* Segmented VPN Control — Standard ⇄ Secure */}
+        <nav className="hidden md:flex items-center gap-2">
+          {flags.show_updates_page && (
+            <Link
+              to="/updates"
+              className={`rounded-full px-3 py-1.5 text-xs font-bold transition-colors ${
+                isSecure ? 'text-slate-400 hover:text-neon-orange hover:bg-white/[0.04]' : 'text-slate-500 hover:text-blue-700 hover:bg-white/80'
+              }`}
+            >
+              업데이트
+            </Link>
+          )}
+          {flags.show_url_status_tool && (
+            <Link
+              to="/tools/url-status-checker"
+              className={`rounded-full px-3 py-1.5 text-xs font-bold transition-colors ${
+                isSecure ? 'text-slate-400 hover:text-neon-orange hover:bg-white/[0.04]' : 'text-slate-500 hover:text-blue-700 hover:bg-white/80'
+              }`}
+            >
+              URL 체크
+            </Link>
+          )}
+        </nav>
+
         <div
           className={`relative flex items-center rounded-full p-1 transition-all duration-200 ${
             isSecure

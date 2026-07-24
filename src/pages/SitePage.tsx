@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, CheckCircle2, ExternalLink, FolderOpen, HelpCircle, Info, Tag } from 'lucide-react';
+import { Activity, ArrowLeft, CheckCircle2, Clock, ExternalLink, FolderOpen, HelpCircle, Info, Tag } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import Header from '../components/Header';
 import AIBridgeOverlay from '../components/AIBridgeOverlay';
@@ -8,7 +8,10 @@ import { useTheme } from '../context/ThemeContext';
 import type { Site } from '../data/categories';
 import { categoryPath } from '../lib/categorySlug';
 import { getSiteSlug, sitePath, slugifySiteName } from '../lib/siteSlug';
-import { getSiteStatusMeta } from '../lib/siteStatus';
+import { calculateSiteStatusScore, getCheckStatusBadgeClass, getCheckStatusLabel, getSiteStatusMeta, normalizeCheckStatus } from '../lib/siteStatus';
+import { useFeatureFlags } from '../context/FeatureFlagsContext';
+import { readRecentlyViewedSites, RecentlyViewedSite, saveRecentlyViewedSite } from '../lib/recentlyViewedSites';
+import { RecentlyViewedSitesBlock, formatDateTime } from '../components/GrowthFeatureBlocks';
 
 const siteName = '전체닷컴';
 
@@ -43,6 +46,17 @@ const safeDecode = (value: string) => {
 type FaqItem = {
   question: string;
   answer: string;
+};
+
+type CheckHistoryItem = {
+  id?: number;
+  created_at?: string | null;
+  check_status?: string | null;
+  http_status?: number | null;
+  checked_url?: string | null;
+  final_url?: string | null;
+  candidate_new_url?: string | null;
+  memo?: string | null;
 };
 
 const parseTextList = (value?: string | string[] | null) => {
@@ -87,7 +101,10 @@ export default function SitePage() {
   const navigate = useNavigate();
   const { isSecure } = useTheme();
   const { allSites, categories } = useData();
+  const { flags } = useFeatureFlags();
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
+  const [checkHistory, setCheckHistory] = useState<CheckHistoryItem[]>([]);
+  const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedSite[]>([]);
 
   const siteParam = useMemo(() => safeDecode(location.pathname.replace(/^\/site\/?/, '')), [location.pathname]);
   const siteMatch = useMemo(() => {
@@ -159,6 +176,20 @@ export default function SitePage() {
       .slice(0, 6),
     [allSites, site?.categoryName, site?.id]
   );
+  const statusScore = site ? calculateSiteStatusScore(site) : 0;
+  const timelineItems = useMemo<CheckHistoryItem[]>(() => {
+    if (!site) return [];
+    if (checkHistory.length > 0) return checkHistory.slice(0, 5);
+    return [{
+      created_at: site.last_checked_at || null,
+      check_status: site.check_status || null,
+      http_status: site.http_status ?? null,
+      checked_url: site.url,
+      final_url: site.final_url || null,
+      candidate_new_url: site.candidate_new_url || null,
+      memo: site.status_memo || '현재 사이트 상태 기준 기록입니다.',
+    }];
+  }, [checkHistory, site]);
 
   useEffect(() => {
     if (!site) return;
@@ -185,6 +216,22 @@ export default function SitePage() {
     }
     getOrCreateCanonical().href = canonical;
   }, [navigate, site, siteMatch.matchedBy]);
+
+  useEffect(() => {
+    if (!site || !flags.show_site_check_timeline) return;
+    fetch(`/api/sites/${site.id}/check-history?limit=5`)
+      .then((res) => res.json())
+      .then((body) => {
+        if (body?.ok && Array.isArray(body.data)) setCheckHistory(body.data);
+      })
+      .catch((err) => console.error('Site check history load failed', err));
+  }, [flags.show_site_check_timeline, site]);
+
+  useEffect(() => {
+    if (!site || !flags.show_recently_viewed_sites) return;
+    saveRecentlyViewedSite(site);
+    setRecentlyViewed(readRecentlyViewedSites().filter((item) => item.site_id !== site.id));
+  }, [flags.show_recently_viewed_sites, site]);
 
   return (
     <div className={`min-h-screen transition-colors duration-300 ${isSecure ? 'bg-obsidian-deep' : 'bg-metallic'}`}>
@@ -283,6 +330,53 @@ export default function SitePage() {
               </div>
             </section>
 
+            {flags.show_site_status_score && (
+              <section className={`mt-5 rounded-2xl border p-5 ${
+                isSecure ? 'glass-dark border-white/[0.08]' : 'glass-light border-slate-200/70'
+              }`}>
+                <div className="grid grid-cols-1 md:grid-cols-[160px_1fr] gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className={`flex h-16 w-16 items-center justify-center rounded-2xl border text-2xl font-black ${
+                      statusScore >= 80
+                        ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                        : statusScore >= 50
+                          ? 'border-amber-500/30 bg-amber-500/10 text-amber-300'
+                          : 'border-red-500/30 bg-red-500/10 text-red-300'
+                    }`}>
+                      {statusScore}
+                    </div>
+                    <div>
+                      <div className={`text-sm font-black ${isSecure ? 'text-white' : 'text-slate-900'}`}>상태 점수</div>
+                      <div className={`text-xs ${isSecure ? 'text-slate-500' : 'text-slate-500'}`}>0~100점 기준</div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
+                    <div className={`rounded-xl border p-3 ${isSecure ? 'border-white/[0.06] bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
+                      <div className="text-[10px] font-bold text-slate-500">현재 상태</div>
+                      <div className={`mt-1 text-sm font-black ${isSecure ? 'text-white' : 'text-slate-900'}`}>{getCheckStatusLabel(site.check_status || site.status)}</div>
+                    </div>
+                    <div className={`rounded-xl border p-3 ${isSecure ? 'border-white/[0.06] bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
+                      <div className="text-[10px] font-bold text-slate-500">마지막 확인</div>
+                      <div className={`mt-1 text-xs font-bold ${isSecure ? 'text-slate-300' : 'text-slate-700'}`}>{formatDateTime(site.last_checked_at)}</div>
+                    </div>
+                    <div className={`rounded-xl border p-3 ${isSecure ? 'border-white/[0.06] bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
+                      <div className="text-[10px] font-bold text-slate-500">HTTP</div>
+                      <div className={`mt-1 text-sm font-black ${isSecure ? 'text-white' : 'text-slate-900'}`}>{site.http_status || '-'}</div>
+                    </div>
+                    <div className={`rounded-xl border p-3 ${isSecure ? 'border-white/[0.06] bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
+                      <div className="text-[10px] font-bold text-slate-500">최종 URL</div>
+                      <div className={`mt-1 truncate text-xs font-mono ${isSecure ? 'text-slate-300' : 'text-slate-700'}`}>{site.final_url || '-'}</div>
+                    </div>
+                  </div>
+                </div>
+                {site.candidate_new_url && (
+                  <div className="mt-3 inline-flex rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-xs font-bold text-sky-300">
+                    주소 변경 후보 감지
+                  </div>
+                )}
+              </section>
+            )}
+
             <section className="mt-8 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] gap-5">
               <div className="space-y-5">
                 <div className={`rounded-2xl border p-5 ${
@@ -380,6 +474,43 @@ export default function SitePage() {
                     </div>
                   </div>
                 )}
+
+                {flags.show_site_check_timeline && (
+                  <div className={`rounded-2xl border p-5 ${
+                    isSecure ? 'glass-dark border-white/[0.08]' : 'glass-light border-slate-200/70'
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      <Activity size={16} className={isSecure ? 'text-neon-orange' : 'text-blue-600'} />
+                      <h2 className={`text-lg font-black ${isSecure ? 'text-white' : 'text-slate-900'}`}>
+                        점검/주소 변경 타임라인
+                      </h2>
+                    </div>
+                    <div className="mt-4 space-y-3">
+                      {timelineItems.map((item, index) => {
+                        const checkStatus = normalizeCheckStatus(item.check_status || site.check_status || site.status);
+                        return (
+                          <div key={item.id || index} className={`rounded-xl border p-4 ${isSecure ? 'border-white/[0.06] bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${getCheckStatusBadgeClass(checkStatus, isSecure)}`}>
+                                {getCheckStatusLabel(checkStatus)}
+                              </span>
+                              <span className={`inline-flex items-center gap-1 text-xs ${isSecure ? 'text-slate-500' : 'text-slate-500'}`}>
+                                <Clock size={12} /> {formatDateTime(item.created_at)}
+                              </span>
+                              <span className={`text-xs font-mono ${isSecure ? 'text-slate-500' : 'text-slate-500'}`}>HTTP {item.http_status || '-'}</span>
+                            </div>
+                            <div className={`mt-2 space-y-1 text-xs ${isSecure ? 'text-slate-400' : 'text-slate-600'}`}>
+                              <div className="truncate"><span className="font-bold">Checked:</span> {item.checked_url || '-'}</div>
+                              <div className="truncate"><span className="font-bold">Final:</span> {item.final_url || '-'}</div>
+                              {item.candidate_new_url && <div className="truncate text-sky-300"><span className="font-bold">Candidate:</span> {item.candidate_new_url}</div>}
+                              {item.memo && <p className="pt-1 leading-5">{item.memo}</p>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <aside className="space-y-4">
@@ -442,6 +573,12 @@ export default function SitePage() {
                   ))}
                 </div>
               </section>
+            )}
+
+            {flags.show_recently_viewed_sites && (
+              <div className="mt-8">
+                <RecentlyViewedSitesBlock items={recentlyViewed} isSecure={isSecure} />
+              </div>
             )}
           </>
         ) : (

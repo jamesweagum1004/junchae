@@ -8,8 +8,10 @@ import { useData } from '../context/DataContext';
 import type { Category, Site } from '../data/categories';
 import { categoryPath, getCategorySlug, slugifyCategoryName } from '../lib/categorySlug';
 import { sitePath } from '../lib/siteSlug';
-import { getSiteStatusMeta } from '../lib/siteStatus';
+import { getSiteStatusMeta, isProblemStatus, isRedirectedStatus, normalizeSiteStatus } from '../lib/siteStatus';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useFeatureFlags } from '../context/FeatureFlagsContext';
+import { formatDateTime } from '../components/GrowthFeatureBlocks';
 
 const siteName = '전체닷컴';
 
@@ -143,6 +145,7 @@ export default function CategoryPage() {
   const isMobile = useIsMobile();
   const { isSecure } = useTheme();
   const { categories } = useData();
+  const { flags } = useFeatureFlags();
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
 
   const categoryParam = useMemo(() => {
@@ -170,6 +173,21 @@ export default function CategoryPage() {
   const category = categoryMatch.category;
 
   const faqItems = useMemo(() => parseFaq(category?.seo_faq), [category?.seo_faq]);
+  const statusStats = useMemo(() => {
+    const sites = category?.sites || [];
+    const redirected = sites.filter((site) => isRedirectedStatus(site.check_status, site.candidate_new_url)).length;
+    const problem = sites.filter((site) => isProblemStatus(site.check_status, site.status)).length;
+    const normal = sites.filter((site) =>
+      !isRedirectedStatus(site.check_status, site.candidate_new_url) &&
+      !isProblemStatus(site.check_status, site.status) &&
+      (site.check_status === 'normal' || normalizeSiteStatus(site.status) === 'normal')
+    ).length;
+    const lastUpdated = sites
+      .map((site) => site.last_checked_at)
+      .filter(Boolean)
+      .sort((a, b) => new Date(String(b)).getTime() - new Date(String(a)).getTime())[0] || null;
+    return { total: sites.length, normal, redirected, problem, lastUpdated };
+  }, [category?.sites]);
 
   useEffect(() => {
     if (!category) return;
@@ -244,6 +262,26 @@ export default function CategoryPage() {
                 {category.seo_intro || `${category.name} 카테고리의 주요 사이트를 한 곳에서 확인할 수 있습니다. 사이트명과 접속 상태를 빠르게 살펴보고 필요한 링크로 이동하세요.`}
               </p>
             </section>
+
+            {flags.show_category_status_stats && (
+              <section className="mb-5 grid grid-cols-2 lg:grid-cols-5 gap-2">
+                {[
+                  ['전체 사이트 수', statusStats.total],
+                  ['정상', statusStats.normal],
+                  ['리다이렉트', statusStats.redirected],
+                  ['확인 필요', statusStats.problem],
+                  ['마지막 업데이트', formatDateTime(statusStats.lastUpdated)],
+                ].map(([label, value]) => (
+                  <div
+                    key={label as string}
+                    className={`rounded-xl border p-3 ${isSecure ? 'glass-dark border-white/[0.08]' : 'glass-light border-slate-200/70'}`}
+                  >
+                    <div className="text-[10px] font-bold text-slate-500">{label as string}</div>
+                    <div className={`mt-1 text-sm font-black ${isSecure ? 'text-white' : 'text-slate-900'}`}>{String(value)}</div>
+                  </div>
+                ))}
+              </section>
+            )}
 
             <section className="grid grid-cols-2 md:grid-cols-2 xl:grid-cols-3 gap-2 md:gap-4">
               {category.sites.map((site) => (

@@ -18,6 +18,7 @@ import {
   Search,
   LayoutDashboard,
   Link2,
+  Rocket,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAdminAuth } from '../context/AdminAuthContext';
@@ -35,6 +36,7 @@ import AccountSettings from '../admin/tabs/AccountSettings';
 import CmsDashboard from '../admin/tabs/CmsDashboard';
 import SeoFilesManager from '../admin/tabs/SeoFilesManager';
 import LinkCheckManager from '../admin/tabs/LinkCheckManager';
+import GrowthFeatureSettings from '../admin/tabs/GrowthFeatureSettings';
 
 const TABS = [
   { id: 'dashboard', label: '대시보드', icon: LayoutDashboard, desc: '방문자/CMS 현황' },
@@ -46,6 +48,7 @@ const TABS = [
   { id: 'analytics', label: 'Google Site Kit', icon: BarChart2, desc: 'GA/Search Console' },
   { id: 'seo-files', label: 'SEO 파일 관리', icon: FileText, desc: 'robots/sitemap' },
   { id: 'link-check', label: '링크 상태 점검', icon: Link2, desc: '서버 링크 체크' },
+  { id: 'growth-features', label: '성장 기능 설정', icon: Rocket, desc: '포털 기능 ON/OFF' },
   { id: 'pseo', label: 'pSEO 관리', icon: FileText, desc: '사이트별 메타' },
   { id: 'ai-seo', label: 'AI SEO 센터', icon: Search, desc: 'AI SEO 생성' },
   { id: 'bridge', label: '브릿지 광고', icon: Radio, desc: 'ExoClick 설정' },
@@ -120,6 +123,7 @@ export default function AdminPage() {
       case 'analytics': return <AnalyticsSettings />;
       case 'seo-files': return <SeoFilesManager />;
       case 'link-check': return <LinkCheckManager onEditSite={(siteId) => selectTab('sites', siteId)} />;
+      case 'growth-features': return <GrowthFeatureSettings />;
       case 'pseo': return <PSEOManager />;
       case 'ai-seo': return <AISEOManager />;
       case 'bridge': return <BridgeAdManager />;

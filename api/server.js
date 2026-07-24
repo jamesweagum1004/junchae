@@ -7,6 +7,8 @@ const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const dns = require('dns').promises;
+const net = require('net');
 const { promisify } = require('util');
 
 const app = express();
@@ -26,6 +28,8 @@ const adPublicPath = '/uploads/ads';
 const sitePreviewPublicPath = '/uploads/previews';
 const seoFilesMode = 'normal';
 const seoFilesSection = 'seo_files';
+const growthFeaturesMode = 'global';
+const growthFeaturesSection = 'growth_features';
 const adminApiToken = (process.env.ADMIN_API_TOKEN || '').trim();
 const adminAuthMode = 'normal';
 const adminAuthSection = 'admin_auth';
@@ -72,9 +76,22 @@ const defaultSeoFileSettings = {
   sitemap_last_generated_at: '',
 };
 
+const defaultGrowthFeatureSettings = {
+  show_home_status_sections: 'true',
+  show_site_status_score: 'true',
+  show_site_check_timeline: 'true',
+  show_updates_page: 'true',
+  show_url_status_tool: 'true',
+  show_category_status_stats: 'true',
+  show_recently_viewed_sites: 'false',
+};
+
 const analyticsRateWindowMs = 60 * 1000;
 const analyticsRateMax = 120;
 const analyticsRateBuckets = new Map();
+const urlToolRateWindowMs = 60 * 1000;
+const urlToolRateMax = 12;
+const urlToolRateBuckets = new Map();
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
@@ -461,6 +478,103 @@ function domainFromUrl(value) {
   return parsed.hostname.toLowerCase().replace(/^www\./, '');
 }
 
+function isPrivateIp(ip) {
+  const version = net.isIP(ip);
+  if (version === 4) {
+    const parts = ip.split('.').map((part) => Number(part));
+    const [a, b] = parts;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      a >= 224
+    );
+  }
+  if (version === 6) {
+    const lower = ip.toLowerCase();
+    if (lower.startsWith('::ffff:')) return isPrivateIp(lower.replace('::ffff:', ''));
+    return (
+      lower === '::1' ||
+      lower === '::' ||
+      lower.startsWith('fc') ||
+      lower.startsWith('fd') ||
+      lower.startsWith('fe80')
+    );
+  }
+  return false;
+}
+
+async function assertPublicHttpUrl(value) {
+  const parsed = parseHttpUrl(value);
+  if (!parsed) {
+    const err = new Error('Only valid http/https URLs are allowed.');
+    err.code = 'INVALID_URL';
+    throw err;
+  }
+
+  const hostname = parsed.hostname.toLowerCase();
+  if (
+    hostname === 'localhost' ||
+    hostname.endsWith('.localhost') ||
+    hostname === '0.0.0.0' ||
+    isPrivateIp(hostname)
+  ) {
+    const err = new Error('Private or local URLs are not allowed.');
+    err.code = 'BLOCKED_URL';
+    throw err;
+  }
+
+  const records = await dns.lookup(hostname, { all: true, verbatim: true }).catch(() => []);
+  if (records.some((record) => isPrivateIp(record.address))) {
+    const err = new Error('Private or local network targets are not allowed.');
+    err.code = 'BLOCKED_URL';
+    throw err;
+  }
+
+  parsed.hash = '';
+  return parsed.toString();
+}
+
+async function fetchPublicUrlWithTimeout(url, timeoutMs = 15000, maxRedirects = 5) {
+  let currentUrl = await assertPublicHttpUrl(url);
+  for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(currentUrl, {
+        redirect: 'manual',
+        signal: controller.signal,
+        headers: {
+          'user-agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+          accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+        },
+      });
+      clearTimeout(timeout);
+
+      const location = response.headers.get('location');
+      if (response.status >= 300 && response.status < 400 && location) {
+        const nextUrl = new URL(location, currentUrl).toString();
+        currentUrl = await assertPublicHttpUrl(nextUrl);
+        continue;
+      }
+
+      return { response, finalUrl: currentUrl };
+    } catch (err) {
+      clearTimeout(timeout);
+      throw err;
+    }
+  }
+
+  const err = new Error('Too many redirects.');
+  err.code = 'TOO_MANY_REDIRECTS';
+  throw err;
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -617,6 +731,75 @@ async function checkSiteLink(site) {
       final_url: null,
       candidate_new_url: null,
       status_memo: isTimeout ? '15초 안에 응답하지 않아 timeout으로 기록했습니다.' : `요청 오류: ${err?.message || 'unknown error'}`,
+    };
+  }
+}
+
+async function checkPublicUrlStatus(inputUrl) {
+  const checkedUrl = await assertPublicHttpUrl(inputUrl);
+  try {
+    const { response, finalUrl: responseFinalUrl } = await fetchPublicUrlWithTimeout(checkedUrl);
+    const finalUrl = normalizeHttpUrl(responseFinalUrl || checkedUrl);
+    const httpStatus = Number(response.status) || null;
+    let sample = '';
+    const contentType = String(response.headers.get('content-type') || '').toLowerCase();
+    if (contentType.includes('text') || contentType.includes('html') || contentType.includes('json') || contentType.includes('xml')) {
+      sample = (await response.text()).slice(0, 250000);
+    }
+
+    const originalDomain = domainFromUrl(checkedUrl);
+    const finalDomain = domainFromUrl(finalUrl);
+    const candidateNewUrl = finalDomain && originalDomain && finalDomain !== originalDomain ? finalUrl : null;
+    let checkStatus = 'unknown';
+
+    if (isCloudflareChallenge(httpStatus, sample, response.headers)) {
+      checkStatus = 'challenge';
+    } else if (isRestrictedContent(sample, finalUrl)) {
+      checkStatus = 'restricted';
+    } else if (candidateNewUrl) {
+      checkStatus = 'redirected';
+    } else if (httpStatus >= 200 && httpStatus <= 299) {
+      checkStatus = 'normal';
+    } else if (httpStatus === 403) {
+      checkStatus = 'restricted';
+    } else if (httpStatus === 404 || httpStatus === 410) {
+      checkStatus = 'down';
+    } else if (httpStatus >= 500) {
+      checkStatus = 'server_error';
+    } else if (httpStatus >= 300 && httpStatus <= 399) {
+      checkStatus = candidateNewUrl ? 'redirected' : 'unknown';
+    }
+
+    const result = {
+      checked_url: checkedUrl,
+      http_status: httpStatus,
+      check_status: checkStatus,
+      final_url: finalUrl,
+      candidate_new_url: candidateNewUrl,
+      original_domain: originalDomain,
+      final_domain: finalDomain,
+    };
+    return {
+      ...result,
+      is_redirected: Boolean(candidateNewUrl || finalUrl !== checkedUrl),
+      is_challenge: checkStatus === 'challenge',
+      is_restricted: checkStatus === 'restricted',
+      is_down: ['down', 'timeout', 'server_error'].includes(checkStatus),
+      status_memo: appendDomainChangeMemo(linkStatusMemo(result), result),
+    };
+  } catch (err) {
+    const isTimeout = err?.name === 'AbortError' || String(err?.message || '').toLowerCase().includes('abort');
+    return {
+      checked_url: checkedUrl,
+      http_status: null,
+      check_status: isTimeout ? 'timeout' : 'unknown',
+      final_url: null,
+      candidate_new_url: null,
+      is_redirected: false,
+      is_challenge: false,
+      is_restricted: false,
+      is_down: isTimeout,
+      status_memo: isTimeout ? '15초 안에 응답하지 않아 timeout으로 기록했습니다.' : '요청을 완료하지 못했습니다.',
     };
   }
 }
@@ -1445,6 +1628,17 @@ async function initializeDatabase() {
     await saveSettings(seoFilesMode, seoFilesSection, missingSeoFileSettings);
   }
 
+  const existingGrowthFeatures = await getSettings(growthFeaturesMode, growthFeaturesSection, true);
+  const missingGrowthFeatureSettings = {};
+  Object.entries(defaultGrowthFeatureSettings).forEach(([key, value]) => {
+    if (!Object.prototype.hasOwnProperty.call(existingGrowthFeatures, key)) {
+      missingGrowthFeatureSettings[key] = value;
+    }
+  });
+  if (Object.keys(missingGrowthFeatureSettings).length > 0) {
+    await saveSettings(growthFeaturesMode, growthFeaturesSection, missingGrowthFeatureSettings);
+  }
+
   await ensureAdminAuthDefaults();
 
   await db.execute(`
@@ -1526,6 +1720,23 @@ app.post('/api/admin/auth-settings', requireAdminToken, asyncRoute(async (req, r
   });
 }));
 
+app.get('/api/features/growth', asyncRoute(async (req, res) => {
+  const settings = await getGrowthFeatureSettings();
+  return res.json({ ok: true, data: settings });
+}));
+
+app.get('/api/admin/features/growth', requireAdminToken, asyncRoute(async (req, res) => {
+  const settings = await getGrowthFeatureSettings();
+  return res.json({ ok: true, data: settings });
+}));
+
+app.post('/api/admin/features/growth', requireAdminToken, asyncRoute(async (req, res) => {
+  const payload = growthFeaturePayloadForSave(req.body || {});
+  await saveSettings(growthFeaturesMode, growthFeaturesSection, payload);
+  const settings = await getGrowthFeatureSettings();
+  return res.json({ ok: true, data: settings });
+}));
+
 app.get('/robots.txt', asyncRoute(async (req, res) => {
   const settings = await getSeoFileSettings();
   const content = await readPublicFile('robots.txt', settings.robots_txt);
@@ -1534,9 +1745,8 @@ app.get('/robots.txt', asyncRoute(async (req, res) => {
 
 app.get('/sitemap.xml', asyncRoute(async (req, res) => {
   const settings = await getSeoFileSettings();
-  const fallback = (await generateSitemapXml(settings)).xml;
-  const content = await readPublicFile('sitemap.xml', fallback);
-  res.type('application/xml').send(content);
+  const sitemap = await generateSitemapXml(settings);
+  res.type('application/xml').send(sitemap.xml);
 }));
 
 app.get('/api/admin/seo-files', requireAdminToken, asyncRoute(async (req, res) => {
@@ -1842,6 +2052,29 @@ function parseBooleanSetting(value, fallback = false) {
   return fallback;
 }
 
+function normalizeGrowthFeatureSettings(settings = {}) {
+  return Object.fromEntries(
+    Object.entries(defaultGrowthFeatureSettings).map(([key, fallback]) => [
+      key,
+      parseBooleanSetting(settings[key], fallback === 'true'),
+    ])
+  );
+}
+
+function growthFeaturePayloadForSave(settings = {}) {
+  const allowedKeys = new Set(Object.keys(defaultGrowthFeatureSettings));
+  return Object.fromEntries(
+    Object.entries(settings)
+      .filter(([key]) => allowedKeys.has(key))
+      .map(([key, value]) => [key, String(parseBooleanSetting(value, defaultGrowthFeatureSettings[key] === 'true'))])
+  );
+}
+
+async function getGrowthFeatureSettings() {
+  const settings = await getSettings(growthFeaturesMode, growthFeaturesSection, true);
+  return normalizeGrowthFeatureSettings(settings);
+}
+
 function parseJsonArraySetting(value) {
   if (Array.isArray(value)) return value;
   if (!value) return [];
@@ -1984,6 +2217,7 @@ function normalizeCustomSitemapUrl(value, baseUrl) {
 
 async function generateSitemapXml(settings) {
   const normalized = normalizeSeoFileSettings(settings);
+  const features = await getGrowthFeatureSettings();
   const entries = new Map();
   const today = formatDateOnly();
 
@@ -1993,6 +2227,16 @@ async function generateSitemapXml(settings) {
     'daily',
     '1.0'
   ));
+
+  if (features.show_updates_page) {
+    const loc = absoluteUrl(normalized.sitemap_base_url, '/updates');
+    entries.set(loc, sitemapUrlEntry(loc, today, 'daily', '0.7'));
+  }
+
+  if (features.show_url_status_tool) {
+    const loc = absoluteUrl(normalized.sitemap_base_url, '/tools/url-status-checker');
+    entries.set(loc, sitemapUrlEntry(loc, today, 'weekly', '0.6'));
+  }
 
   if (normalized.sitemap_include_categories) {
     const modes = [];
@@ -2157,6 +2401,18 @@ function isAnalyticsRateLimited(key) {
   bucket.count += 1;
   analyticsRateBuckets.set(key, bucket);
   return bucket.count > analyticsRateMax;
+}
+
+function isUrlToolRateLimited(key) {
+  const now = Date.now();
+  const bucket = urlToolRateBuckets.get(key) || { count: 0, startedAt: now };
+  if (now - bucket.startedAt > urlToolRateWindowMs) {
+    urlToolRateBuckets.set(key, { count: 1, startedAt: now });
+    return false;
+  }
+  bucket.count += 1;
+  urlToolRateBuckets.set(key, bucket);
+  return bucket.count > urlToolRateMax;
 }
 
 async function isProtectedAnalyticsPath(pathValue) {
@@ -2494,6 +2750,36 @@ app.post('/api/settings', requireAdminToken, asyncRoute(async (req, res) => {
   await saveSettings(mode, section, req.body?.settings || {}, secretKeys);
   const settings = await getSettings(mode, section, false);
   return res.json({ ok: true, data: settings });
+}));
+
+app.post('/api/tools/url-status-check', asyncRoute(async (req, res) => {
+  const rateKey = hashAnalyticsValue(getClientIp(req)) || 'unknown';
+  if (isUrlToolRateLimited(rateKey)) {
+    return jsonError(res, 429, 'RATE_LIMITED', 'Too many URL checks. Please try again later.');
+  }
+
+  try {
+    const result = await checkPublicUrlStatus(req.body?.url);
+    const data = {
+      input_url: normalizeRequiredText(req.body?.url),
+      http_status: result.http_status,
+      check_status: result.check_status,
+      final_url: result.final_url,
+      is_redirected: result.is_redirected,
+      is_challenge: result.is_challenge,
+      is_restricted: result.is_restricted,
+      is_down: result.is_down,
+      memo: result.status_memo,
+    };
+    return res.json({
+      ok: true,
+      ...data,
+      data,
+    });
+  } catch (err) {
+    const status = err?.code === 'BLOCKED_URL' || err?.code === 'INVALID_URL' ? 400 : 500;
+    return jsonError(res, status, err?.code || 'URL_CHECK_FAILED', err?.message || 'URL status check failed.');
+  }
 }));
 
 app.get('/api/admin/sites/check-duplicate', requireAdminToken, asyncRoute(async (req, res) => {
@@ -2939,6 +3225,90 @@ app.post('/api/admin/link-candidates/:id/import', requireAdminToken, asyncRoute(
   return res.status(201).json({ ok: true, data: { candidate_id: id, site } });
 }));
 
+function publicSiteRow(row) {
+  return {
+    ...row,
+    category_slug: row.category_slug || null,
+    site_slug: normalizeSiteSlug(row.seo_slug) || baseSiteSlug(row.name, row.id),
+  };
+}
+
+async function queryRecentStatusSites(mode, clause, limit) {
+  const [rows] = await db.execute(
+    `SELECT ${siteColumns.map((column) => `s.${column}`).join(', ')}, c.slug AS category_slug
+     FROM sites s
+     LEFT JOIN categories c ON c.name = s.category AND c.mode = s.mode
+     WHERE s.mode = ?
+       AND COALESCE(s.is_hidden, 0) = 0
+       AND (${clause})
+     ORDER BY COALESCE(s.last_checked_at, s.updated_at, s.created_at) DESC, s.id DESC
+     LIMIT ?`,
+    [mode, limit]
+  );
+  return rows.map(publicSiteRow);
+}
+
+app.get('/api/sites/recent-status', asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.query.mode);
+  const limit = clampInt(req.query.limit, 1, 20, 8);
+  const [recentNormal, recentChanged, recentProblem] = await Promise.all([
+    queryRecentStatusSites(mode, `(s.check_status = 'normal' OR s.status IN ('normal','active','정상','?뺤긽'))`, limit),
+    queryRecentStatusSites(mode, `(s.candidate_new_url IS NOT NULL OR s.check_status = 'redirected')`, limit),
+    queryRecentStatusSites(
+      mode,
+      `(s.check_status IN ('down','timeout','restricted','server_error','challenge','unknown')
+        OR s.status IN ('down','offline','slow','접속불가','?묒냽遺덇?'))`,
+      limit
+    ),
+  ]);
+
+  return res.json({
+    ok: true,
+    data: {
+      recent_normal: recentNormal,
+      recent_changed: recentChanged,
+      recent_problem: recentProblem,
+    },
+  });
+}));
+
+app.get('/api/sites/updates', asyncRoute(async (req, res) => {
+  const mode = normalizeMode(req.query.mode);
+  const limit = clampInt(req.query.limit, 1, 50, 20);
+  const [recentChanged, recentProblem, recentNormal, recentAdded] = await Promise.all([
+    queryRecentStatusSites(mode, `(s.candidate_new_url IS NOT NULL OR s.check_status = 'redirected')`, limit),
+    queryRecentStatusSites(
+      mode,
+      `(s.check_status IN ('down','timeout','restricted','server_error','challenge','unknown')
+        OR s.status IN ('down','offline','slow','접속불가','?묒냽遺덇?'))`,
+      limit
+    ),
+    queryRecentStatusSites(mode, `(s.check_status = 'normal' OR s.status IN ('normal','active','정상','?뺤긽'))`, limit),
+    (async () => {
+      const [rows] = await db.execute(
+        `SELECT ${siteColumns.map((column) => `s.${column}`).join(', ')}, c.slug AS category_slug
+         FROM sites s
+         LEFT JOIN categories c ON c.name = s.category AND c.mode = s.mode
+         WHERE s.mode = ? AND COALESCE(s.is_hidden, 0) = 0
+         ORDER BY s.created_at DESC, s.id DESC
+         LIMIT ?`,
+        [mode, limit]
+      );
+      return rows.map(publicSiteRow);
+    })(),
+  ]);
+
+  return res.json({
+    ok: true,
+    data: {
+      recent_changed: recentChanged,
+      recent_problem: recentProblem,
+      recent_normal: recentNormal,
+      recent_added: recentAdded,
+    },
+  });
+}));
+
 app.get('/api/sites', asyncRoute(async (req, res) => {
   await ensureSiteSlugs();
   const values = [];
@@ -2954,6 +3324,28 @@ app.get('/api/sites', asyncRoute(async (req, res) => {
     values
   );
   res.json({ ok: true, data: rows });
+}));
+
+app.get('/api/sites/:id/check-history', asyncRoute(async (req, res) => {
+  const id = parseId(req.params.id);
+  if (!id) return jsonError(res, 400, 'INVALID_ID', 'A valid numeric id is required.');
+
+  const site = await getSiteById(id);
+  if (!site || Number(site.is_hidden || 0) === 1) {
+    return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+  }
+
+  const limit = clampInt(req.query.limit, 1, 20, 5);
+  const [rows] = await db.execute(
+    `SELECT id, site_id, checked_url, http_status, check_status, final_url, candidate_new_url, memo, created_at
+     FROM site_check_logs
+     WHERE site_id = ?
+     ORDER BY created_at DESC, id DESC
+     LIMIT ?`,
+    [id, limit]
+  );
+
+  return res.json({ ok: true, data: rows });
 }));
 
 app.get('/api/sites/:id/seo', asyncRoute(async (req, res) => {

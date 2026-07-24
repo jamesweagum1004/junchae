@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Globe, ChevronRight, AlertTriangle, ShieldCheck, Lock, MessageCircle, Trophy } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
@@ -13,12 +13,30 @@ import { sitePath } from '../lib/siteSlug';
 import { getSiteStatusMeta } from '../lib/siteStatus';
 import { useIsMobile } from '../hooks/useIsMobile';
 import type { Site } from '../data/categories';
+import { useFeatureFlags } from '../context/FeatureFlagsContext';
+import { RecentlyViewedSitesBlock, StatusSite, StatusSiteCard } from '../components/GrowthFeatureBlocks';
+import { readRecentlyViewedSites, RecentlyViewedSite } from '../lib/recentlyViewedSites';
+
+type RecentStatusPayload = {
+  recent_normal: StatusSite[];
+  recent_changed: StatusSite[];
+  recent_problem: StatusSite[];
+};
+
+const emptyRecentStatus: RecentStatusPayload = {
+  recent_normal: [],
+  recent_changed: [],
+  recent_problem: [],
+};
 
 export default function MainPage() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
   const { isSecure, setMode } = useTheme();
   const { categories, secureCategories, telegramLink, telegramVisible } = useData();
+  const { flags } = useFeatureFlags();
+  const [recentStatus, setRecentStatus] = useState<RecentStatusPayload>(emptyRecentStatus);
+  const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedSite[]>([]);
   const featuredSites = categories
     .flatMap((category) =>
       category.sites.map((site) => ({
@@ -34,6 +52,22 @@ export default function MainPage() {
     .slice(0, 10);
 
   const [overlay, setOverlay] = useState<{ url: string; name: string } | null>(null);
+
+  useEffect(() => {
+    if (!flags.show_home_status_sections) return;
+    const mode = isSecure ? 'secure' : 'normal';
+    fetch(`/api/sites/recent-status?mode=${mode}`)
+      .then((res) => res.json())
+      .then((body) => {
+        if (body?.ok) setRecentStatus({ ...emptyRecentStatus, ...body.data });
+      })
+      .catch((err) => console.error('Recent status sections load failed', err));
+  }, [flags.show_home_status_sections, isSecure]);
+
+  useEffect(() => {
+    if (!flags.show_recently_viewed_sites) return;
+    setRecentlyViewed(readRecentlyViewedSites());
+  }, [flags.show_recently_viewed_sites]);
 
   const handleSiteClick = (site: Site) => {
     if (isMobile) {
@@ -204,6 +238,39 @@ export default function MainPage() {
               ))}
             </div>
           </section>
+        )}
+
+        {flags.show_home_status_sections && (
+          <section className="clear-both">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              {[
+                ['최근 정상 확인 사이트', recentStatus.recent_normal],
+                ['최근 주소 변경 감지', recentStatus.recent_changed],
+                ['확인 필요 사이트', recentStatus.recent_problem],
+              ].map(([title, rows]) => (
+                <div key={title as string} className={`rounded-2xl border p-4 ${
+                  isSecure ? 'glass-dark border-white/[0.08]' : 'glass-light border-slate-200/70'
+                }`}>
+                  <div className={`mb-3 text-sm font-black ${isSecure ? 'text-white' : 'text-slate-900'}`}>{title as string}</div>
+                  <div className="space-y-2">
+                    {(rows as StatusSite[]).length > 0 ? (
+                      (rows as StatusSite[]).slice(0, 8).map((site) => (
+                        <StatusSiteCard key={`${title}-${site.id}`} site={site} isSecure={isSecure} />
+                      ))
+                    ) : (
+                      <div className={`rounded-xl border p-4 text-sm ${isSecure ? 'border-white/[0.06] text-slate-500' : 'border-slate-200 text-slate-500'}`}>
+                        표시할 사이트가 없습니다.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {flags.show_recently_viewed_sites && (
+          <RecentlyViewedSitesBlock items={recentlyViewed} isSecure={isSecure} />
         )}
 
         {/* Premium Ads */}
