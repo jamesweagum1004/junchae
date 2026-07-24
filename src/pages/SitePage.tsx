@@ -107,19 +107,23 @@ export default function SitePage() {
   const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedSite[]>([]);
 
   const siteParam = useMemo(() => safeDecode(location.pathname.replace(/^\/site\/?/, '')), [location.pathname]);
+  const visibleAllSites = useMemo(
+    () => allSites.filter((item) => !item.isHidden && !item.is_hidden),
+    [allSites]
+  );
   const siteMatch = useMemo(() => {
     const normalizedParam = siteParam.trim().toLowerCase();
-    const bySlug = allSites.find((item) => String(item.seo_slug || '').toLowerCase() === normalizedParam);
+    const bySlug = visibleAllSites.find((item) => String(item.seo_slug || '').toLowerCase() === normalizedParam);
     if (bySlug) return { site: bySlug, matchedBy: 'slug' as const };
 
-    const byId = allSites.find((item) => String(item.id) === siteParam);
+    const byId = visibleAllSites.find((item) => String(item.id) === siteParam);
     if (byId) return { site: byId, matchedBy: 'id' as const };
 
-    const byNameSlug = allSites.find((item) => slugifySiteName(item.name, item.id) === normalizedParam);
+    const byNameSlug = visibleAllSites.find((item) => slugifySiteName(item.name, item.id) === normalizedParam);
     if (byNameSlug) return { site: byNameSlug, matchedBy: 'nameSlug' as const };
 
     return { site: null, matchedBy: null };
-  }, [allSites, siteParam]);
+  }, [siteParam, visibleAllSites]);
 
   const site = siteMatch.site;
   const category = useMemo(
@@ -171,10 +175,10 @@ export default function SitePage() {
     [site?.seo_keywords]
   );
   const relatedSites = useMemo(
-    () => allSites
+    () => visibleAllSites
       .filter((item) => item.id !== site?.id && item.categoryName === site?.categoryName)
       .slice(0, 6),
-    [allSites, site?.categoryName, site?.id]
+    [site?.categoryName, site?.id, visibleAllSites]
   );
   const statusScore = site ? calculateSiteStatusScore(site) : 0;
   const timelineItems = useMemo<CheckHistoryItem[]>(() => {
@@ -229,6 +233,7 @@ export default function SitePage() {
 
   useEffect(() => {
     if (!site || !flags.show_recently_viewed_sites) return;
+    if (site.isHidden || site.is_hidden) return;
     saveRecentlyViewedSite(site, mode);
     setRecentlyViewed(readRecentlyViewedSites(mode).filter((item) => item.site_id !== site.id));
   }, [flags.show_recently_viewed_sites, mode, site]);

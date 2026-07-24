@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Globe, ChevronRight, AlertTriangle, ShieldCheck, Lock, MessageCircle, Trophy } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '../context/ThemeContext';
@@ -32,12 +32,29 @@ const emptyRecentStatus: RecentStatusPayload = {
 export default function MainPage() {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
-  const { isSecure, setMode } = useTheme();
+  const { isSecure, mode, setMode } = useTheme();
   const { categories, secureCategories, telegramLink, telegramVisible } = useData();
   const { flags } = useFeatureFlags();
   const [recentStatus, setRecentStatus] = useState<RecentStatusPayload>(emptyRecentStatus);
   const [recentlyViewed, setRecentlyViewed] = useState<RecentlyViewedSite[]>([]);
-  const featuredSites = categories
+  const activeCategories = isSecure ? secureCategories : categories;
+  const visibleSiteIds = useMemo(
+    () => new Set(
+      activeCategories.flatMap((category) =>
+        category.sites
+          .filter((site) => !site.isHidden && !site.is_hidden)
+          .map((site) => site.id)
+      )
+    ),
+    [activeCategories]
+  );
+  const visibleRecentlyViewed = useMemo(
+    () => recentlyViewed.filter((item) =>
+      item.mode === (isSecure ? 'secure' : 'normal') && visibleSiteIds.has(item.site_id)
+    ),
+    [isSecure, recentlyViewed, visibleSiteIds]
+  );
+  const featuredSites = activeCategories
     .flatMap((category) =>
       category.sites.map((site) => ({
         ...site,
@@ -65,9 +82,12 @@ export default function MainPage() {
   }, [flags.show_home_status_sections, isSecure]);
 
   useEffect(() => {
-    if (!flags.show_recently_viewed_sites) return;
-    setRecentlyViewed(readRecentlyViewedSites(isSecure ? 'secure' : 'standard'));
-  }, [flags.show_recently_viewed_sites, isSecure]);
+    if (!flags.show_recently_viewed_sites) {
+      setRecentlyViewed([]);
+      return;
+    }
+    setRecentlyViewed(readRecentlyViewedSites(mode));
+  }, [flags.show_recently_viewed_sites, mode]);
 
   const handleSiteClick = (site: Site) => {
     if (isMobile) {
@@ -145,7 +165,7 @@ export default function MainPage() {
               </span>
             </div>
             <div className="flex gap-2 overflow-x-auto pb-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {categories.map((category) => (
+              {activeCategories.map((category) => (
                 <button
                   key={category.id}
                   onClick={() => navigate(categoryPath(category))}
@@ -164,6 +184,27 @@ export default function MainPage() {
             </div>
           </div>
 
+        </section>
+
+        {/* Premium Ads */}
+        <section className="clear-both">
+          <AdsGrid onAdClick={handleExternalClick} />
+        </section>
+
+        {flags.show_recently_viewed_sites && visibleRecentlyViewed.length > 0 && (
+          <RecentlyViewedSitesBlock items={visibleRecentlyViewed} isSecure={isSecure} limit={flags.recently_viewed_limit} />
+        )}
+
+        {/* Category Grid — fully decoupled independent grid */}
+        <section className="clear-both mt-8">
+          <div className="flex items-center gap-2 mb-4">
+            <Globe size={14} className={isSecure ? 'text-neon-orange' : 'text-blue-600'} />
+            <span className={`text-xs font-semibold uppercase tracking-widest ${isSecure ? 'text-neon-orange/70' : 'text-slate-400'}`}>
+              {isSecure ? 'DIRECTORY_INDEX' : '전체 카테고리'}
+            </span>
+            <ChevronRight size={12} className={isSecure ? 'text-slate-600' : 'text-slate-300'} />
+          </div>
+          <CategoryGrid onSiteClick={handleSiteClick} onAdClick={handleExternalClick} />
         </section>
 
         {featuredSites.length > 0 && (
@@ -268,28 +309,6 @@ export default function MainPage() {
             </div>
           </section>
         )}
-
-        {flags.show_recently_viewed_sites && (
-          <RecentlyViewedSitesBlock items={recentlyViewed} isSecure={isSecure} limit={flags.recently_viewed_limit} />
-        )}
-
-        {/* Premium Ads */}
-        <section className="clear-both">
-          <AdsGrid onAdClick={handleExternalClick} />
-        </section>
-
-        {/* Category Grid — fully decoupled independent grid */}
-        <section className="clear-both mt-8">
-          <div className="flex items-center gap-2 mb-4">
-            <Globe size={14} className={isSecure ? 'text-neon-orange' : 'text-blue-600'} />
-            <span className={`text-xs font-semibold uppercase tracking-widest ${isSecure ? 'text-neon-orange/70' : 'text-slate-400'}`}>
-              {isSecure ? 'DIRECTORY_INDEX' : '전체 카테고리'}
-            </span>
-            <ChevronRight size={12} className={isSecure ? 'text-slate-600' : 'text-slate-300'} />
-          </div>
-          <CategoryGrid onSiteClick={handleSiteClick} onAdClick={handleExternalClick} />
-        </section>
-
         {/* Lock Teaser — only in Standard mode */}
         {!isSecure && (
           <section>

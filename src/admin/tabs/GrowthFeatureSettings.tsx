@@ -39,7 +39,7 @@ const featureItems: { key: BooleanFeatureKey; title: string; description: string
   {
     key: 'show_recently_viewed_sites',
     title: '최근 본 사이트',
-    description: '브라우저 localStorage 기반 최근 본 사이트 목록을 표시합니다.',
+    description: '방문자가 최근 열람한 사이트를 메인/상세 페이지에 표시합니다. 일반/안전 모드는 분리됩니다.',
   },
 ];
 

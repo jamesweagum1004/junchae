@@ -87,12 +87,12 @@ export function RecentlyViewedSitesBlock({
           최근 본 사이트
         </span>
       </div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
         {items.slice(0, limit).map((item) => (
           <button
             key={`${item.site_id}-${item.viewed_at}`}
             onClick={() => navigate(item.slug)}
-            className={`rounded-xl border p-3 text-left transition-all hover:scale-[1.01] ${
+            className={`min-w-0 rounded-xl border p-3 text-left transition-all hover:scale-[1.01] ${
               isSecure ? 'glass-dark border-white/[0.08] hover:border-neon-orange/30' : 'glass-light border-slate-200/70 hover:border-blue-300'
             }`}
           >
@@ -100,9 +100,16 @@ export function RecentlyViewedSitesBlock({
               <div className="h-8 w-8 shrink-0 overflow-hidden rounded-lg border border-slate-200 bg-white/90 p-1">
                 {item.logo ? <img src={item.logo} alt="" className="h-full w-full object-contain" /> : null}
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className={`truncate text-sm font-black ${isSecure ? 'text-white' : 'text-slate-900'}`}>{item.name}</div>
-                <div className={`truncate text-[11px] ${isSecure ? 'text-slate-500' : 'text-slate-500'}`}>{item.category}</div>
+                <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                  <span className={`shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-bold ${
+                    isSecure ? 'border-neon-orange/25 bg-neon-orange/10 text-neon-orange' : 'border-blue-200 bg-blue-50 text-blue-700'
+                  }`}>
+                    최근 열람
+                  </span>
+                  <span className={`truncate text-[11px] ${isSecure ? 'text-slate-500' : 'text-slate-500'}`}>{item.category}</span>
+                </div>
               </div>
             </div>
           </button>

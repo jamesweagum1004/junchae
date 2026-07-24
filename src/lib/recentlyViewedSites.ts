@@ -17,17 +17,23 @@ const legacyStorageKey = 'junchae_recently_viewed_sites';
 const storageKeyForMode = (mode: AppMode | 'normal' | 'secure') =>
   mode === 'secure' ? 'junchae_recently_viewed_secure' : 'junchae_recently_viewed_normal';
 
+const toInternalSitePath = (value: unknown, siteId: number) => {
+  const raw = String(value || siteId).trim();
+  if (raw.startsWith('/site/')) return raw;
+  return `/site/${encodeURIComponent(raw.replace(/^\/+/, '') || String(siteId))}`;
+};
+
 const normalizeStoredItem = (item: unknown, fallbackMode?: 'normal' | 'secure'): RecentlyViewedSite | null => {
   if (typeof item !== 'object' || item === null) return null;
   const source = item as Partial<RecentlyViewedSite>;
   const mode = source.mode || fallbackMode;
   if (mode !== 'normal' && mode !== 'secure') return null;
   const siteId = Number(source.site_id);
-  if (!Number.isFinite(siteId) || siteId <= 0 || !source.name || !source.slug) return null;
+  if (!Number.isFinite(siteId) || siteId <= 0 || !source.name) return null;
   return {
     site_id: siteId,
     name: String(source.name),
-    slug: String(source.slug),
+    slug: toInternalSitePath(source.slug, siteId),
     logo: String(source.logo || ''),
     category: String(source.category || ''),
     category_slug: String(source.category_slug || ''),
@@ -65,6 +71,7 @@ export const saveRecentlyViewedSite = (
   mode: AppMode | 'normal' | 'secure'
 ) => {
   try {
+    if (site.is_hidden || site.isHidden) return;
     const normalizedMode: 'normal' | 'secure' = site.mode === 'secure' || mode === 'secure' ? 'secure' : 'normal';
     const current = readRecentlyViewedSites(normalizedMode).filter((item) => item.site_id !== site.id);
     const next: RecentlyViewedSite[] = [
