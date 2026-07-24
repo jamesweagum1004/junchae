@@ -124,6 +124,10 @@ function isManualBrowserCheckStatus(status?: string | null) {
   return status === 'challenge' || status === 'restricted';
 }
 
+function canMarkSiteDown(status?: string | null) {
+  return status === 'down' || status === 'timeout' || status === 'restricted';
+}
+
 function shortenUrl(url: string, maxLength = 42) {
   if (url.length <= maxLength) return url;
   return `${url.slice(0, Math.max(12, maxLength - 12))}...${url.slice(-8)}`;
@@ -200,8 +204,12 @@ function UrlCell({
   );
 }
 
-export default function LinkCheckManager() {
-  const { getModeData } = useData();
+type LinkCheckManagerProps = {
+  onEditSite?: (siteId: number) => void;
+};
+
+export default function LinkCheckManager({ onEditSite }: LinkCheckManagerProps) {
+  const { getModeData, updateSiteStatusInMode } = useData();
   const [mode, setMode] = useState<LinkMode>('secure');
   const [categorySlug, setCategorySlug] = useState('');
   const [displayFilter, setDisplayFilter] = useState<DisplayFilter>('problem');
@@ -406,8 +414,27 @@ export default function LinkCheckManager() {
     }
   };
 
-  const openSitesTab = () => {
-    window.dispatchEvent(new CustomEvent('junchae-admin-tab', { detail: { tab: 'sites' } }));
+  const markSiteDown = async (row: LinkCheckRow) => {
+    setRunning(`down-${row.id}`);
+    setNotice('');
+    setError('');
+    try {
+      await updateSiteStatusInMode(row.mode === 'secure' ? 'secure' : 'standard', row.id, 'down');
+      setNotice('사이트 상태를 접속불가로 저장했고 해당 카테고리 맨 아래로 이동했습니다.');
+      await loadReport(mode, categorySlug, displayFilter);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '사이트 상태를 접속불가로 변경하지 못했습니다.');
+    } finally {
+      setRunning('');
+    }
+  };
+
+  const openSitesTab = (siteId: number) => {
+    if (onEditSite) {
+      onEditSite(siteId);
+      return;
+    }
+    window.dispatchEvent(new CustomEvent('junchae-admin-tab', { detail: { tab: 'sites', siteId } }));
   };
 
   const selectedCategoryName = useMemo(
@@ -679,8 +706,17 @@ export default function LinkCheckManager() {
                               확인완료
                             </button>
                           )}
+                          {canMarkSiteDown(row.check_status) && (
+                            <button
+                              onClick={() => void markSiteDown(row)}
+                              disabled={Boolean(running)}
+                              className="rounded-lg border border-red-500/30 px-2 py-1 text-[11px] font-bold text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                            >
+                              상태를 접속불가로 변경
+                            </button>
+                          )}
                           <button
-                            onClick={openSitesTab}
+                            onClick={() => openSitesTab(row.id)}
                             className="rounded-lg border border-obsidian-500 px-2 py-1 text-[11px] font-bold text-slate-400 hover:bg-obsidian-700 hover:text-white"
                           >
                             사이트 수정

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   FolderOpen,
   List,
@@ -19,7 +19,7 @@ import {
   LayoutDashboard,
   Link2,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAdminAuth } from '../context/AdminAuthContext';
 import AdminLogin from '../components/AdminLogin';
 import CategoryManager from '../admin/tabs/CategoryManager';
@@ -54,21 +54,54 @@ const TABS = [
 
 export default function AdminPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { isAuthenticated, logout } = useAdminAuth();
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [focusSiteId, setFocusSiteId] = useState<number | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const selectTab = useCallback((tab: string, siteId?: number | null, replace = false) => {
+    if (!TABS.some((item) => item.id === tab)) return;
+
+    setActiveTab(tab);
+    setFocusSiteId(tab === 'sites' && siteId ? siteId : null);
+    setSidebarOpen(false);
+
+    const params = new URLSearchParams(window.location.search);
+    params.set('tab', tab);
+    if (tab === 'sites' && siteId) {
+      params.set('siteId', String(siteId));
+    } else {
+      params.delete('siteId');
+    }
+
+    const search = params.toString();
+    const hash = tab === 'sites' && siteId ? `#site-row-${siteId}` : '';
+    navigate(`${window.location.pathname}${search ? `?${search}` : ''}${hash}`, { replace });
+  }, [navigate]);
 
   useEffect(() => {
     const handleTabChange = (event: Event) => {
-      const tab = (event as CustomEvent<{ tab?: string }>).detail?.tab;
+      const detail = (event as CustomEvent<{ tab?: string; siteId?: number }>).detail;
+      const tab = detail?.tab;
       if (tab && TABS.some((item) => item.id === tab)) {
-        setActiveTab(tab);
-        setSidebarOpen(false);
+        selectTab(tab, detail?.siteId);
       }
     };
     window.addEventListener('junchae-admin-tab', handleTabChange);
     return () => window.removeEventListener('junchae-admin-tab', handleTabChange);
-  }, []);
+  }, [selectTab]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const tab = params.get('tab') || 'dashboard';
+    const siteId = Number(params.get('siteId') || 0);
+
+    if (TABS.some((item) => item.id === tab)) {
+      setActiveTab(tab);
+      setFocusSiteId(tab === 'sites' && Number.isFinite(siteId) && siteId > 0 ? siteId : null);
+    }
+  }, [location.search]);
 
   if (!isAuthenticated) {
     return <AdminLogin onSuccess={() => {}} onExit={() => navigate('/')} />;
@@ -80,13 +113,13 @@ export default function AdminPage() {
     switch (activeTab) {
       case 'dashboard': return <CmsDashboard />;
       case 'categories': return <CategoryManager />;
-      case 'sites': return <SiteManager />;
+      case 'sites': return <SiteManager focusSiteId={focusSiteId} />;
       case 'logos': return <LogoUploader />;
       case 'deepseek': return <DeepSeekSettings />;
       case 'ads': return <AdController />;
       case 'analytics': return <AnalyticsSettings />;
       case 'seo-files': return <SeoFilesManager />;
-      case 'link-check': return <LinkCheckManager />;
+      case 'link-check': return <LinkCheckManager onEditSite={(siteId) => selectTab('sites', siteId)} />;
       case 'pseo': return <PSEOManager />;
       case 'ai-seo': return <AISEOManager />;
       case 'bridge': return <BridgeAdManager />;
@@ -143,8 +176,7 @@ export default function AdminPage() {
                 <button
                   key={tab.id}
                   onClick={() => {
-                    setActiveTab(tab.id);
-                    setSidebarOpen(false);
+                    selectTab(tab.id);
                   }}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-all duration-150 group ${
                     isActive ? 'bg-neon-orange/10 border border-neon-orange/20' : 'hover:bg-obsidian-700 border border-transparent'

@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -21,7 +21,7 @@ import { Site, SiteStatus } from '../../data/categories';
 import ModeSubTabs from '../ModeSubTabs';
 import { adminAuthHeaders } from '../../lib/adminApi';
 import { uploadSitePreviewImage } from '../../lib/adminUploads';
-import { getSiteStatusMeta, normalizeSiteStatus } from '../../lib/siteStatus';
+import { compareSitesByStatusAndOrder, getSiteStatusMeta, normalizeSiteStatus } from '../../lib/siteStatus';
 import { sitePath, slugifySiteName } from '../../lib/siteSlug';
 
 const statusOptions: { value: SiteStatus; label: string }[] = [
@@ -50,7 +50,11 @@ const detailDraftFromSite = (site: Site): SiteDetailDraft => ({
   preview_image: site.preview_image || '',
 });
 
-export default function SiteManager() {
+type SiteManagerProps = {
+  focusSiteId?: number | null;
+};
+
+export default function SiteManager({ focusSiteId }: SiteManagerProps) {
   const {
     getModeData,
     addSiteInMode,
@@ -78,18 +82,23 @@ export default function SiteManager() {
     ),
     [categories]
   );
-  const filteredSites = allSites.filter((site) => {
-    const categoryMatches =
-      categoryFilter === 'all' ||
-      site.categoryName === categoryFilter ||
-      site.categoryId === categoryFilter;
-    const stateMatches =
-      stateFilter === 'all' ||
-      (stateFilter === 'visible' && !site.isHidden && !site.is_hidden) ||
-      (stateFilter === 'hidden' && (site.isHidden || site.is_hidden)) ||
-      (stateFilter === 'featured' && (site.isFeatured || site.is_featured));
-    return categoryMatches && stateMatches;
-  });
+  const filteredSites = useMemo(() =>
+    allSites
+      .filter((site) => {
+        const categoryMatches =
+          categoryFilter === 'all' ||
+          site.categoryName === categoryFilter ||
+          site.categoryId === categoryFilter;
+        const stateMatches =
+          stateFilter === 'all' ||
+          (stateFilter === 'visible' && !site.isHidden && !site.is_hidden) ||
+          (stateFilter === 'hidden' && (site.isHidden || site.is_hidden)) ||
+          (stateFilter === 'featured' && (site.isFeatured || site.is_featured));
+        return categoryMatches && stateMatches;
+      })
+      .sort(compareSitesByStatusAndOrder),
+    [allSites, categoryFilter, stateFilter]
+  );
 
   const [form, setForm] = useState({
     name: '',
@@ -111,9 +120,53 @@ export default function SiteManager() {
   const [expandedDetailId, setExpandedDetailId] = useState<number | null>(null);
   const [detailDrafts, setDetailDrafts] = useState<Record<number, SiteDetailDraft>>({});
   const [detailNotices, setDetailNotices] = useState<Record<number, { type: 'info' | 'error'; message: string }>>({});
+  const [highlightedSiteId, setHighlightedSiteId] = useState<number | null>(null);
+  const [statusNotice, setStatusNotice] = useState('');
   const [previewUploadingId, setPreviewUploadingId] = useState<number | null>(null);
   const modalFileInputRef = useRef<HTMLInputElement>(null);
   const newSiteFileInputRef = useRef<HTMLInputElement>(null);
+  const handledFocusSiteIdRef = useRef(0);
+  const normalizedFocusSiteId = Number(focusSiteId || 0);
+
+  useEffect(() => {
+    if (!normalizedFocusSiteId) return;
+    if (handledFocusSiteIdRef.current === normalizedFocusSiteId) return;
+
+    const modeWithSite = (['standard', 'secure'] as const).find((mode) =>
+      getModeData(mode).categories.some((category) =>
+        category.sites.some((site) => site.id === normalizedFocusSiteId)
+      )
+    );
+
+    if (!modeWithSite) return;
+    handledFocusSiteIdRef.current = normalizedFocusSiteId;
+    if (modeWithSite && modeWithSite !== activeMode) {
+      setActiveMode(modeWithSite);
+    }
+    setCategoryFilter('all');
+    setStateFilter('all');
+    setExpandedDetailId(normalizedFocusSiteId);
+  }, [activeMode, getModeData, normalizedFocusSiteId]);
+
+  useEffect(() => {
+    if (!normalizedFocusSiteId || !filteredSites.some((site) => site.id === normalizedFocusSiteId)) return;
+
+    const scrollTimer = window.setTimeout(() => {
+      const row = document.getElementById(`site-row-${normalizedFocusSiteId}`);
+      if (!row) return;
+
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedSiteId(normalizedFocusSiteId);
+    }, 120);
+    const highlightTimer = window.setTimeout(() => {
+      setHighlightedSiteId((current) => current === normalizedFocusSiteId ? null : current);
+    }, 3000);
+
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(highlightTimer);
+    };
+  }, [filteredSites, normalizedFocusSiteId]);
 
   const showError = (message: string, err: unknown) => {
     console.error(message, err);
@@ -188,8 +241,15 @@ export default function SiteManager() {
   };
 
   const updateStatus = async (id: number, status: SiteStatus) => {
+    const nextStatus = normalizeSiteStatus(status);
     try {
-      await updateSiteStatusInMode(activeMode, id, normalizeSiteStatus(status));
+      await updateSiteStatusInMode(activeMode, id, nextStatus);
+      if (nextStatus === 'down') {
+        setStatusNotice('해당 카테고리 맨 아래로 이동됨');
+        window.setTimeout(() => {
+          setStatusNotice((current) => current === '해당 카테고리 맨 아래로 이동됨' ? '' : current);
+        }, 2600);
+      }
     } catch (err) {
       showError('상태 변경에 실패했습니다.', err);
     }
@@ -442,10 +502,7 @@ export default function SiteManager() {
   const moveSiteInCategory = async (site: Site & { categoryName: string }, direction: -1 | 1) => {
     const categorySites = allSites
       .filter((item) => item.categoryName === site.categoryName)
-      .sort((a, b) =>
-        (a.sortOrder ?? a.sort_order ?? 0) - (b.sortOrder ?? b.sort_order ?? 0) ||
-        a.name.localeCompare(b.name)
-      );
+      .sort(compareSitesByStatusAndOrder);
     const index = categorySites.findIndex((item) => item.id === site.id);
     const target = index + direction;
     if (index < 0 || target < 0 || target >= categorySites.length) return;
@@ -468,6 +525,12 @@ export default function SiteManager() {
         setActiveMode(mode);
         setCategoryFilter('all');
       }} />
+
+      {statusNotice && (
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs font-bold text-emerald-300">
+          {statusNotice}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 p-4 bg-obsidian-600 rounded-xl border border-obsidian-500">
         <input
@@ -581,10 +644,16 @@ export default function SiteManager() {
               const detailDraft = getDetailDraft(site);
               const detailNotice = detailNotices[site.id];
               const detailExpanded = expandedDetailId === site.id;
+              const highlighted = highlightedSiteId === site.id;
 
               return (
                 <Fragment key={site.id}>
-                <tr key={site.id} className={`border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors ${isHidden ? 'opacity-55' : ''}`}>
+                <tr
+                  id={`site-row-${site.id}`}
+                  className={`border-b border-obsidian-600 hover:bg-obsidian-600/50 transition-colors ${
+                    highlighted ? 'bg-amber-500/15 ring-2 ring-amber-400/60 shadow-[0_0_24px_rgba(251,191,36,0.24)]' : ''
+                  } ${isHidden ? 'opacity-55' : ''}`}
+                >
                   <td className="px-3 py-2.5">
                     <div className="w-8 h-8 rounded bg-white/90 border border-obsidian-500 flex items-center justify-center overflow-hidden p-1">
                       {site.logo ? (

@@ -408,6 +408,21 @@ function normalizeSiteStatus(value) {
   return 'checking';
 }
 
+function isUnavailableSiteStatus(value) {
+  return normalizeSiteStatus(value) === 'down';
+}
+
+function siteStatusPrioritySql(prefix = '') {
+  const column = `${prefix}status`;
+  return `CASE
+    WHEN ${column} IN ('normal', 'active', '정상') THEN 0
+    WHEN ${column} IN ('busy', 'congested', '혼잡') THEN 1
+    WHEN ${column} IN ('checking', 'unknown', '확인중') THEN 2
+    WHEN ${column} IN ('down', 'offline', 'slow', '접속불가') THEN 9
+    ELSE 2
+  END`;
+}
+
 function normalizeBooleanInt(value, fallback = 1) {
   if (value === true || value === 1 || value === '1' || value === 'true') return 1;
   if (value === false || value === 0 || value === '0' || value === 'false') return 0;
@@ -1205,6 +1220,18 @@ async function getSiteById(id) {
     [id]
   );
   return rows[0] || null;
+}
+
+async function nextSiteSortOrderAtBottom(mode, category) {
+  const normalizedMode = normalizeMode(mode);
+  const normalizedCategory = normalizeOptionalText(category);
+  const where = normalizedCategory ? 'mode = ? AND category = ?' : 'mode = ?';
+  const values = normalizedCategory ? [normalizedMode, normalizedCategory] : [normalizedMode];
+  const [rows] = await db.execute(
+    `SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_order FROM sites WHERE ${where}`,
+    values
+  );
+  return normalizeSortOrder(rows[0]?.next_order || 1);
 }
 
 async function getCategoryById(id) {
@@ -2922,7 +2949,8 @@ app.get('/api/sites', asyncRoute(async (req, res) => {
   }
 
   const [rows] = await db.execute(
-    `SELECT ${siteColumns.join(', ')} FROM sites ${where} ORDER BY category ASC, sort_order ASC, name ASC, id ASC`,
+    `SELECT ${siteColumns.join(', ')} FROM sites ${where}
+     ORDER BY category ASC, ${siteStatusPrioritySql()}, sort_order ASC, name ASC, id ASC`,
     values
   );
   res.json({ ok: true, data: rows });
@@ -3870,6 +3898,17 @@ async function saveSiteUpdates(req, res) {
     updates.seo_slug = uniqueSiteSlug(updates.name || existing.name, id, taken);
   }
 
+  if (
+    Object.prototype.hasOwnProperty.call(updates, 'status') &&
+    isUnavailableSiteStatus(updates.status) &&
+    !Object.prototype.hasOwnProperty.call(updates, 'sort_order')
+  ) {
+    updates.sort_order = await nextSiteSortOrderAtBottom(
+      updates.mode || existing.mode,
+      Object.prototype.hasOwnProperty.call(updates, 'category') ? updates.category : existing.category
+    );
+  }
+
   const entries = Object.entries(updates);
   if (entries.length === 0) {
     return jsonError(res, 400, 'VALIDATION_ERROR', 'No editable fields were provided.');
@@ -3923,7 +3962,7 @@ app.patch('/api/sites/reorder', requireAdminToken, asyncRoute(async (req, res) =
     `SELECT ${siteColumns.join(', ')}
      FROM sites
      WHERE mode = ? AND category = ?
-     ORDER BY sort_order ASC, name ASC, id ASC`,
+     ORDER BY ${siteStatusPrioritySql()}, sort_order ASC, name ASC, id ASC`,
     [mode, category]
   );
   return res.json({ ok: true, data: rows });
@@ -3975,13 +4014,24 @@ app.patch('/api/sites/:id/status', requireAdminToken, asyncRoute(async (req, res
   }
   const status = normalizeSiteStatus(rawStatus);
 
-  const [result] = await db.execute('UPDATE sites SET status = ? WHERE id = ?', [status, id]);
+  const existing = await getSiteById(id);
+  if (!existing) {
+    return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
+  }
+
+  const movedToBottom = isUnavailableSiteStatus(status);
+  const nextSortOrder = movedToBottom
+    ? await nextSiteSortOrderAtBottom(existing.mode, existing.category)
+    : null;
+  const [result] = movedToBottom
+    ? await db.execute('UPDATE sites SET status = ?, sort_order = ? WHERE id = ?', [status, nextSortOrder, id])
+    : await db.execute('UPDATE sites SET status = ? WHERE id = ?', [status, id]);
   if (result.affectedRows === 0) {
     return jsonError(res, 404, 'NOT_FOUND', 'Site not found.');
   }
 
   const updated = await getSiteById(id);
-  return res.json({ ok: true, data: updated });
+  return res.json({ ok: true, data: { ...updated, moved_to_bottom: movedToBottom } });
 }));
 
 app.delete('/api/sites/:id', requireAdminToken, asyncRoute(async (req, res) => {

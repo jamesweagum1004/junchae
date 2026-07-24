@@ -48,3 +48,19 @@ export const getSiteStatusMeta = (value: unknown, isSecure = false) => {
     className: isSecure ? meta.dark : meta.light,
   };
 };
+
+export const siteStatusPriority = (value: unknown) => {
+  const status = normalizeSiteStatus(value);
+  if (status === 'normal') return 0;
+  if (status === 'busy') return 1;
+  if (status === 'checking') return 2;
+  return 9;
+};
+
+export const compareSitesByStatusAndOrder = <
+  T extends { status?: unknown; sortOrder?: number; sort_order?: number; name?: string; id?: number }
+>(a: T, b: T) =>
+  siteStatusPriority(a.status) - siteStatusPriority(b.status) ||
+  (a.sortOrder ?? a.sort_order ?? 0) - (b.sortOrder ?? b.sort_order ?? 0) ||
+  String(a.name || '').localeCompare(String(b.name || '')) ||
+  (a.id ?? 0) - (b.id ?? 0);

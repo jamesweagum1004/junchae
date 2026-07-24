@@ -15,7 +15,7 @@ import {
 import { useTheme } from './ThemeContext';
 import { adminAuthHeaders, isWriteRequest } from '../lib/adminApi';
 import { slugifyCategoryName } from '../lib/categorySlug';
-import { normalizeSiteStatus } from '../lib/siteStatus';
+import { compareSitesByStatusAndOrder, normalizeSiteStatus } from '../lib/siteStatus';
 
 export type MobileColumns = 1 | 2;
 type Mode = 'standard' | 'secure';
@@ -257,10 +257,7 @@ const buildCategories = (categories: Category[], siteRows: ApiRow[]) => {
   });
 
   next.forEach((category) => {
-    category.sites.sort((a, b) =>
-      (a.sortOrder ?? a.sort_order ?? 0) - (b.sortOrder ?? b.sort_order ?? 0) ||
-      a.name.localeCompare(b.name)
-    );
+    category.sites.sort(compareSitesByStatusAndOrder);
   });
 
   return next.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.name.localeCompare(b.name));
