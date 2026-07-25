@@ -35,14 +35,45 @@ const statusLabels = {
   candidate_rejected: '후보 확인 완료',
 };
 
-const prerenderBoot = `<script>document.documentElement.classList.add('js-enabled');</script>`;
-
 const prerenderCriticalCss = `<style id="seo-prerender-boot">
-html.js-enabled .seo-prerender {
+html,
+body {
+  min-height: 100%;
+  margin: 0;
+  background: #05060a;
+}
+#app-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #05060a;
+  color: #fff;
+}
+#app-loading .app-loading-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+#app-loading .app-loading-logo {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+#app-loading .app-loading-text {
+  font-size: 13px;
+  color: #9ca3af;
+}
+.seo-prerender {
   position: absolute !important;
+  left: -99999px !important;
+  top: 0 !important;
   width: 1px !important;
-  height: 0 !important;
-  max-height: 0 !important;
+  height: 1px !important;
   margin: 0 !important;
   padding: 0 !important;
   border: 0 !important;
@@ -50,30 +81,29 @@ html.js-enabled .seo-prerender {
   overflow: hidden !important;
   pointer-events: none !important;
 }
-#app-loading {
-  display: none;
-}
-html.js-enabled #app-loading {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-direction: column;
-  gap: 10px;
-  background: #0f172a;
-  color: #f8fafc;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-.app-loading-logo {
-  font-size: 24px;
-  font-weight: 800;
-  letter-spacing: 0;
-}
-.app-loading-text {
-  font-size: 14px;
-  color: #cbd5e1;
-}
 </style>`;
+
+const prerenderNoscriptCss = `<noscript>
+  <style>
+    #app-loading {
+      display: none !important;
+    }
+    .seo-prerender {
+      position: static !important;
+      left: auto !important;
+      top: auto !important;
+      width: auto !important;
+      height: auto !important;
+      overflow: visible !important;
+      opacity: 1 !important;
+      pointer-events: auto !important;
+      padding: 24px !important;
+      background: #fff !important;
+      color: #111 !important;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+    }
+  </style>
+</noscript>`;
 
 function escapeHtml(value) {
   return String(value ?? '')
@@ -207,21 +237,31 @@ function replaceOrInsertHead(html, selectorRegex, tag) {
   return html.replace('</head>', `    ${tag}\n  </head>`);
 }
 
+function insertAfterHeadStart(html, tag) {
+  return html.replace(/<head([^>]*)>/i, (match) => `${match}\n    ${tag}`);
+}
+
 function ensurePrerenderBoot(html) {
   let next = html;
-  if (!next.includes('document.documentElement.classList.add(\'js-enabled\')')) {
-    next = next.replace('</head>', `    ${prerenderBoot}\n  </head>`);
-  }
   if (!next.includes('id="seo-prerender-boot"')) {
-    next = next.replace('</head>', `    ${prerenderCriticalCss}\n  </head>`);
+    next = insertAfterHeadStart(next, prerenderCriticalCss);
+  }
+  if (!next.includes('<noscript>')) {
+    if (next.includes(prerenderCriticalCss)) {
+      next = next.replace(prerenderCriticalCss, `${prerenderCriticalCss}\n    ${prerenderNoscriptCss}`);
+    } else {
+      next = insertAfterHeadStart(next, prerenderNoscriptCss);
+    }
   }
   return next;
 }
 
 function appLoadingHtml() {
-  return `<div id="app-loading" class="app-loading" aria-live="polite">
-  <div class="app-loading-logo">전체닷컴</div>
-  <div class="app-loading-text">사이트 접속 상태를 불러오는 중입니다</div>
+  return `<div id="app-loading" class="app-loading" aria-label="전체닷컴 로딩 중">
+  <div class="app-loading-card">
+    <div class="app-loading-logo">전체닷컴</div>
+    <div class="app-loading-text">사이트 접속 상태를 불러오는 중입니다</div>
+  </div>
 </div>`;
 }
 
@@ -238,7 +278,7 @@ function injectSeo(html, { title, description, canonical, type = 'website', body
   next = replaceOrInsertHead(next, /<meta\s+property=["']og:url["'][^>]*>/i, `<meta property="og:url" content="${safeCanonical}" />`);
   next = replaceOrInsertHead(next, /<meta\s+property=["']og:type["'][^>]*>/i, `<meta property="og:type" content="${escapeHtml(type)}" />`);
   next = ensurePrerenderBoot(next);
-  return next.replace(/<div id="root">[\s\S]*?<\/div>/i, `<div id="root">\n${body}\n${appLoadingHtml()}\n    </div>`);
+  return next.replace(/<div id="root">[\s\S]*?<\/div>/i, `<div id="root">\n${appLoadingHtml()}\n${body}\n    </div>`);
 }
 
 function section(title, items, renderItem) {
