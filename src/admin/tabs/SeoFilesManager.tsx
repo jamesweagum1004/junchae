@@ -18,6 +18,7 @@ type SeoFilesPayload = {
   robots_preview: string;
   sitemap_preview: string;
   sitemap_url_count: number;
+  sitemap_counts?: Record<string, number>;
   robots_exists: boolean;
   sitemap_exists: boolean;
 };
@@ -28,7 +29,7 @@ const defaultSettings: SeoFileSettings = {
   sitemap_include_normal: true,
   sitemap_include_secure: false,
   sitemap_include_categories: true,
-  sitemap_include_sites: false,
+  sitemap_include_sites: true,
   sitemap_custom_urls: [],
   sitemap_last_generated_at: '',
 };
@@ -45,6 +46,7 @@ export default function SeoFilesManager() {
   const [customUrls, setCustomUrls] = useState('');
   const [sitemapPreview, setSitemapPreview] = useState('');
   const [urlCount, setUrlCount] = useState(0);
+  const [sitemapCounts, setSitemapCounts] = useState<Record<string, number>>({});
   const [status, setStatus] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -56,6 +58,7 @@ export default function SeoFilesManager() {
     setCustomUrls((payload.settings.sitemap_custom_urls || []).join('\n'));
     setSitemapPreview(payload.sitemap_preview || '');
     setUrlCount(payload.sitemap_url_count || 0);
+    setSitemapCounts(payload.sitemap_counts || {});
   };
 
   useEffect(() => {
@@ -92,6 +95,7 @@ export default function SeoFilesManager() {
         settings: SeoFileSettings;
         sitemap_xml: string;
         sitemap_url_count: number;
+        sitemap_counts?: Record<string, number>;
         preview_url: string;
         cache_notice: string;
       }>('/api/admin/seo-files/sitemap/generate', {
@@ -105,6 +109,7 @@ export default function SeoFilesManager() {
       setCustomUrls((payload.settings.sitemap_custom_urls || []).join('\n'));
       setSitemapPreview(payload.sitemap_xml);
       setUrlCount(payload.sitemap_url_count);
+      setSitemapCounts(payload.sitemap_counts || {});
       setStatus(`sitemap.xml 생성 완료. ${payload.cache_notice} 미리보기: ${payload.preview_url}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'sitemap.xml 생성에 실패했습니다.');
@@ -173,6 +178,7 @@ export default function SeoFilesManager() {
               ['sitemap_include_normal', 'normal 포함'],
               ['sitemap_include_secure', 'secure 포함'],
               ['sitemap_include_categories', '카테고리 포함'],
+              ['sitemap_include_sites', '사이트 상세 포함'],
             ].map(([key, label]) => (
               <label key={key} className="flex items-center gap-2 rounded-lg border border-obsidian-500 bg-obsidian-700 px-3 py-2 text-xs text-slate-300">
                 <input
@@ -184,12 +190,9 @@ export default function SeoFilesManager() {
                 {label}
               </label>
             ))}
-            <label className="flex items-center gap-2 rounded-lg border border-obsidian-500 bg-obsidian-700 px-3 py-2 text-xs text-slate-500">
-              <input type="checkbox" checked={false} disabled />
-              사이트 상세 포함 준비중
-            </label>
           </div>
         </div>
+        <p className="text-xs text-slate-500">/site/{'{seo_slug}'} pSEO 페이지를 sitemap에 포함합니다. hidden 사이트와 seo_slug가 없는 사이트는 제외됩니다.</p>
 
         <label className="space-y-1 block">
           <span className="text-xs font-semibold text-slate-400">Custom URLs</span>
@@ -212,7 +215,9 @@ export default function SeoFilesManager() {
             <RefreshCw size={13} />
             sitemap 생성/저장
           </button>
-          <span className="text-xs text-slate-500">URL {urlCount}개 · 마지막 생성 {settings.sitemap_last_generated_at || '기록 없음'}</span>
+          <span className="text-xs text-slate-500">
+            URL {urlCount}개 · home {sitemapCounts.home || 0} · category {sitemapCounts.categories || 0} · site {sitemapCounts.sites || 0} · updates {sitemapCounts.updates || 0} · tools {sitemapCounts.tools || 0} · 마지막 생성 {settings.sitemap_last_generated_at || '기록 없음'}
+          </span>
         </div>
 
         <textarea

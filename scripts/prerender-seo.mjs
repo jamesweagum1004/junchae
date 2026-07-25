@@ -170,6 +170,10 @@ function boolSetting(value, fallback) {
   return fallback;
 }
 
+function booleanLike(value, fallback) {
+  return boolSetting(value, fallback);
+}
+
 function intSetting(value, fallback, min, max) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return fallback;
@@ -743,6 +747,10 @@ async function main() {
   }
 
   const canonicalBase = seoSettings?.sitemap_base_url || seoSettings?.canonical_url || canonicalFallback;
+  const sitemapIncludesSecure = booleanLike(seoSettings?.sitemap_include_secure, false);
+  if (settings.prerender_include_secure && runtimeOptions.includeSecure && !sitemapIncludesSecure) {
+    console.warn('warning sitemap/prerender secure mismatch: prerender includes secure routes but sitemap_include_secure is false.');
+  }
   const { modes, categoriesByMode, publicSitesByMode, hiddenSites, noSlugSites, recentByMode, skippedSecure } = await loadData(settings);
   const allCategories = modes.flatMap((mode) => categoriesByMode[mode]);
   const allSites = modes.flatMap((mode) => publicSitesByMode[mode]);

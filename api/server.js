@@ -71,7 +71,7 @@ const defaultSeoFileSettings = {
   sitemap_include_normal: 'true',
   sitemap_include_secure: 'false',
   sitemap_include_categories: 'true',
-  sitemap_include_sites: 'false',
+  sitemap_include_sites: 'true',
   sitemap_custom_urls: '[]',
   sitemap_last_generated_at: '',
 };
@@ -2129,6 +2129,7 @@ app.get('/api/admin/seo-files', requireAdminToken, asyncRoute(async (req, res) =
       robots_preview: settings.robots_txt,
       sitemap_preview: sitemapPreview.xml,
       sitemap_url_count: sitemapPreview.urlCount,
+      sitemap_counts: sitemapPreview.counts,
       robots_exists: robotsExists,
       sitemap_exists: sitemapExists,
     },
@@ -2186,6 +2187,7 @@ app.post('/api/admin/seo-files/sitemap/generate', requireAdminToken, asyncRoute(
       settings: next,
       sitemap_xml: sitemap.xml,
       sitemap_url_count: sitemap.urlCount,
+      sitemap_counts: sitemap.counts,
       file: fileResult,
       public_url: 'https://junchae.com/sitemap.xml',
       preview_url: `/sitemap.xml?ts=${Date.now()}`,
@@ -2496,7 +2498,7 @@ function normalizeSeoFileSettings(settings = {}) {
     sitemap_include_normal: parseBooleanSetting(merged.sitemap_include_normal, true),
     sitemap_include_secure: parseBooleanSetting(merged.sitemap_include_secure, false),
     sitemap_include_categories: parseBooleanSetting(merged.sitemap_include_categories, true),
-    sitemap_include_sites: parseBooleanSetting(merged.sitemap_include_sites, false),
+    sitemap_include_sites: parseBooleanSetting(merged.sitemap_include_sites, true),
     sitemap_custom_urls: parseJsonArraySetting(merged.sitemap_custom_urls)
       .map((url) => normalizeOptionalText(url))
       .filter(Boolean)
@@ -2591,6 +2593,24 @@ function sitemapUrlEntry(loc, lastmod, changefreq, priority) {
   ].join('\n');
 }
 
+function isForbiddenSitemapPath(pathname) {
+  const lower = String(pathname || '').toLowerCase();
+  return lower.startsWith('/junchae1004') ||
+    lower.startsWith('/api') ||
+    lower.startsWith('/admin') ||
+    lower.startsWith('/login') ||
+    lower.startsWith('/uploads') ||
+    lower === '/site' ||
+    lower === '/site/' ||
+    /(^|\/)(undefined|null)(\/|$)/.test(lower) ||
+    lower.includes('/deepseek') ||
+    lower.includes('/settings');
+}
+
+function sitemapSiteLastmod(site) {
+  return formatDateOnly(site.seo_updated_at || site.updated_at || site.last_checked_at || new Date());
+}
+
 function normalizeCustomSitemapUrl(value, baseUrl) {
   const text = normalizeOptionalText(value);
   if (!text) return null;
@@ -2598,7 +2618,7 @@ function normalizeCustomSitemapUrl(value, baseUrl) {
   try {
     const url = text.startsWith('/') ? new URL(text, base) : new URL(text);
     if (url.origin !== base) return null;
-    if (url.pathname.toLowerCase().startsWith('/api')) return null;
+    if (isForbiddenSitemapPath(url.pathname)) return null;
     return `${url.origin}${url.pathname}${url.search}`;
   } catch {
     return null;
@@ -2609,23 +2629,29 @@ async function generateSitemapXml(settings) {
   const normalized = normalizeSeoFileSettings(settings);
   const features = await getGrowthFeatureSettings();
   const entries = new Map();
+  const counts = { home: 0, categories: 0, sites: 0, updates: 0, tools: 0, custom: 0 };
   const today = formatDateOnly();
+  const addEntry = (type, loc, lastmod, changefreq, priority) => {
+    if (!loc || entries.has(loc)) return;
+    entries.set(loc, sitemapUrlEntry(loc, lastmod, changefreq, priority));
+    counts[type] = (counts[type] || 0) + 1;
+  };
 
-  entries.set(absoluteUrl(normalized.sitemap_base_url, '/'), sitemapUrlEntry(
+  addEntry('home',
     absoluteUrl(normalized.sitemap_base_url, '/'),
     today,
     'daily',
     '1.0'
-  ));
+  );
 
   if (features.show_updates_page) {
     const loc = absoluteUrl(normalized.sitemap_base_url, '/updates');
-    entries.set(loc, sitemapUrlEntry(loc, today, 'daily', '0.7'));
+    addEntry('updates', loc, today, 'daily', '0.8');
   }
 
   if (features.show_url_status_tool) {
     const loc = absoluteUrl(normalized.sitemap_base_url, '/tools/url-status-checker');
-    entries.set(loc, sitemapUrlEntry(loc, today, 'weekly', '0.6'));
+    addEntry('tools', loc, today, 'weekly', '0.7');
   }
 
   if (normalized.sitemap_include_categories) {
@@ -2643,7 +2669,7 @@ async function generateSitemapXml(settings) {
       categories.forEach((category) => {
         const slug = encodeURIComponent(normalizeCategorySlug(category.slug) || baseCategorySlug(category.name, category.id));
         const loc = absoluteUrl(normalized.sitemap_base_url, `/category/${slug}`);
-        entries.set(loc, sitemapUrlEntry(loc, formatDateOnly(category.updated_at), 'daily', '0.8'));
+        addEntry('categories', loc, formatDateOnly(category.updated_at || new Date()), 'daily', '0.8');
       });
     }
   }
@@ -2656,25 +2682,36 @@ async function generateSitemapXml(settings) {
     if (modes.length > 0) {
       const placeholders = modes.map(() => '?').join(', ');
       const [sites] = await db.execute(
-        `SELECT id, name, seo_slug, mode, updated_at FROM sites
-         WHERE mode IN (${placeholders}) AND COALESCE(is_hidden, 0) = 0
-         ORDER BY mode ASC, sort_order ASC, name ASC, id ASC`,
+        `SELECT id, name, seo_slug, mode, seo_updated_at, updated_at, last_checked_at, is_featured FROM sites
+         WHERE mode IN (${placeholders})
+           AND COALESCE(is_hidden, 0) = 0
+           AND seo_slug IS NOT NULL
+           AND TRIM(seo_slug) <> ''
+         ORDER BY mode ASC,
+           COALESCE(is_featured, 0) DESC,
+           seo_updated_at DESC,
+           updated_at DESC,
+           created_at DESC,
+           id DESC`,
         modes
       );
 
       sites.forEach((site) => {
-        const slug = encodeURIComponent(normalizeSiteSlug(site.seo_slug) || baseSiteSlug(site.name, site.id));
+        const normalizedSlug = normalizeSiteSlug(site.seo_slug);
+        if (!normalizedSlug) return;
+        const slug = encodeURIComponent(normalizedSlug);
         const loc = absoluteUrl(normalized.sitemap_base_url, `/site/${slug}`);
-        entries.set(loc, sitemapUrlEntry(loc, formatDateOnly(site.updated_at), 'weekly', '0.6'));
+        addEntry('sites', loc, sitemapSiteLastmod(site), 'daily', '0.7');
       });
     }
   }
 
   normalized.sitemap_custom_urls.forEach((customUrl) => {
     const loc = normalizeCustomSitemapUrl(customUrl, normalized.sitemap_base_url);
-    if (loc) entries.set(loc, sitemapUrlEntry(loc, today, 'weekly', '0.7'));
+    if (loc) addEntry('custom', loc, today, 'weekly', '0.7');
   });
 
+  // TODO: if total URLs exceed 50000, split sitemap files and generate a sitemap index.
   const xml = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
@@ -2686,6 +2723,7 @@ async function generateSitemapXml(settings) {
   return {
     xml,
     urlCount: entries.size,
+    counts,
     settings: normalized,
   };
 }
