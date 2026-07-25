@@ -4,9 +4,50 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
-const distDir = path.join(rootDir, 'dist');
-const apiBase = (process.env.PRERENDER_API_BASE || 'http://127.0.0.1:3000').replace(/\/+$/, '');
 const canonicalFallback = 'https://junchae.com';
+const statusFreshnessNotice = '상태 정보는 마지막 점검 기준이며, 접속 시점에 따라 달라질 수 있습니다.';
+
+const cliArgs = Object.fromEntries(
+  process.argv.slice(2)
+    .filter((arg) => arg.startsWith('--'))
+    .map((arg) => {
+      const [key, ...rest] = arg.slice(2).split('=');
+      return [key.replace(/-/g, '_'), rest.length ? rest.join('=') : 'true'];
+    })
+);
+
+function option(name, fallback = '') {
+  const cliKey = name.toLowerCase().replace(/^prerender_/, '');
+  return process.env[name] ?? cliArgs[cliKey] ?? fallback;
+}
+
+function boolOption(name, fallback) {
+  const value = option(name, '');
+  if (value === '') return fallback;
+  if (value === true || value === 'true' || value === '1' || value === 1) return true;
+  if (value === false || value === 'false' || value === '0' || value === 0) return false;
+  return fallback;
+}
+
+function intOption(name, fallback, min, max) {
+  const parsed = Number(option(name, ''));
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(parsed)));
+}
+
+const apiBase = String(option('PRERENDER_API_BASE', 'http://127.0.0.1:3000')).replace(/\/+$/, '');
+const outDirOption = option('PRERENDER_OUT_DIR', 'dist');
+const distDir = path.isAbsolute(outDirOption) ? outDirOption : path.join(rootDir, outDirOption);
+
+const runtimeOptions = {
+  includeSecure: boolOption('PRERENDER_INCLUDE_SECURE', true),
+  maxSitePages: intOption('PRERENDER_MAX_SITE_PAGES', 1000, 1, 10000),
+  skipSites: boolOption('PRERENDER_SKIP_SITES', false),
+  onlyFeatured: boolOption('PRERENDER_ONLY_FEATURED', false),
+  route: normalizeRoute(option('PRERENDER_ROUTE', '')),
+  siteId: option('PRERENDER_SITE_ID', ''),
+  categorySlug: normalizeSlug(option('PRERENDER_CATEGORY_SLUG', ''), ''),
+};
 
 const defaultPrerenderSettings = {
   prerender_enabled: true,
@@ -168,13 +209,23 @@ async function getJson(pathname, { optional = false } = {}) {
 }
 
 function normalizeSlug(value, fallback) {
-  const raw = String(value || fallback || '').trim().toLowerCase();
+  const source = value || fallback || '';
+  if (!String(source).trim()) return '';
+  const raw = String(source).trim().toLowerCase();
   return raw
     .normalize('NFKD')
     .replace(/[^\w\s-]/g, '')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '') || String(fallback || 'page');
+    .replace(/^-|-$/g, '');
+}
+
+function normalizeRoute(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const pathname = raw.startsWith('http') ? new URL(raw).pathname : raw;
+  const withSlash = pathname.startsWith('/') ? pathname : `/${pathname}`;
+  return withSlash.replace(/\/+$/, '') || '/';
 }
 
 function categorySlug(category) {
@@ -182,11 +233,19 @@ function categorySlug(category) {
 }
 
 function siteSlug(site) {
-  return normalizeSlug(site.seo_slug, `${site.name}-${site.id}`);
+  return normalizeSlug(site.seo_slug, '');
+}
+
+function routeSiteSlug(site) {
+  return encodeURIComponent(siteSlug(site));
 }
 
 function siteHidden(site) {
   return site?.is_hidden === 1 || site?.is_hidden === true || site?.isHidden === true;
+}
+
+function siteFeatured(site) {
+  return site?.is_featured === 1 || site?.is_featured === true || site?.isFeatured === true;
 }
 
 function statusLabel(site) {
@@ -202,9 +261,27 @@ function formatPublicCheckDate(value) {
   return `${date.getFullYear()}. ${date.getMonth() + 1}. ${date.getDate()}. 확인`;
 }
 
+function timestamp(value) {
+  const date = new Date(value || 0);
+  return Number.isFinite(date.getTime()) ? date.getTime() : 0;
+}
+
+function compareSitePriority(a, b) {
+  return Number(siteFeatured(b)) - Number(siteFeatured(a)) ||
+    timestamp(b.seo_updated_at) - timestamp(a.seo_updated_at) ||
+    timestamp(b.updated_at) - timestamp(a.updated_at) ||
+    timestamp(b.created_at) - timestamp(a.created_at) ||
+    Number(b.id || 0) - Number(a.id || 0);
+}
+
 function parseTextList(value, limit) {
   if (!value) return [];
-  if (Array.isArray(value)) return value.map((item) => String(item?.title || item?.text || item?.feature || item)).filter(Boolean).slice(0, limit);
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => String(item?.title || item?.text || item?.feature || item))
+      .filter(Boolean)
+      .slice(0, limit);
+  }
   try {
     const parsed = JSON.parse(value);
     if (Array.isArray(parsed)) return parseTextList(parsed, limit);
@@ -248,6 +325,27 @@ function insertAfterHeadStart(html, tag) {
   return html.replace(/<head([^>]*)>/i, (match) => `${match}\n    ${tag}`);
 }
 
+function jsonLdScript(jsonLd) {
+  if (!jsonLd) return '';
+  const json = JSON.stringify(jsonLd).replace(/</g, '\\u003c');
+  return `<script type="application/ld+json">${json}</script>`;
+}
+
+function removeExistingJsonLd(html) {
+  return html.replace(/\s*<script\s+type=["']application\/ld\+json["']>[\s\S]*?<\/script>/gi, '');
+}
+
+function replaceRootContent(html, innerHtml) {
+  const rootMatch = /<div id="root"[^>]*>/i.exec(html);
+  if (!rootMatch) return html;
+  const start = rootMatch.index + rootMatch[0].length;
+  const scriptIndex = html.indexOf('<script type="module"', start);
+  const searchEnd = scriptIndex === -1 ? html.length : scriptIndex;
+  const end = html.lastIndexOf('</div>', searchEnd);
+  if (end < start) return html;
+  return `${html.slice(0, start)}\n${innerHtml}\n    ${html.slice(end)}`;
+}
+
 function ensurePrerenderBoot(html) {
   let next = html;
   if (!next.includes('id="seo-prerender-boot"')) {
@@ -272,7 +370,7 @@ function appLoadingHtml() {
 </div>`;
 }
 
-function injectSeo(html, { title, description, canonical, type = 'website', body }) {
+function injectSeo(html, { title, description, canonical, type = 'website', body, jsonLd }) {
   const safeTitle = escapeHtml(title);
   const safeDescription = escapeHtml(description);
   const safeCanonical = escapeHtml(canonical);
@@ -285,7 +383,11 @@ function injectSeo(html, { title, description, canonical, type = 'website', body
   next = replaceOrInsertHead(next, /<meta\s+property=["']og:url["'][^>]*>/i, `<meta property="og:url" content="${safeCanonical}" />`);
   next = replaceOrInsertHead(next, /<meta\s+property=["']og:type["'][^>]*>/i, `<meta property="og:type" content="${escapeHtml(type)}" />`);
   next = ensurePrerenderBoot(next);
-  return next.replace(/<div id="root">[\s\S]*?<\/div>/i, `<div id="root">\n${appLoadingHtml()}\n${body}\n    </div>`);
+  next = removeExistingJsonLd(next);
+  if (jsonLd) {
+    next = next.replace('</head>', `    ${jsonLdScript(jsonLd)}\n  </head>`);
+  }
+  return replaceRootContent(next, `${appLoadingHtml()}\n${body}`);
 }
 
 function section(title, items, renderItem) {
@@ -300,6 +402,10 @@ function section(title, items, renderItem) {
   ].join('\n');
 }
 
+function statusNotice() {
+  return `<p class="seo-status-notice">${escapeHtml(statusFreshnessNotice)}</p>`;
+}
+
 function layout(content) {
   return `<main class="seo-prerender" data-seo-prerender="true">
   ${content}
@@ -311,11 +417,12 @@ function homeHtml({ categories, sites, recentNormal, recentChanged, recentProble
     `<li><a href="/category/${encodeURIComponent(categorySlug(category))}">${escapeHtml(category.name)}</a></li>`
   ).join('\n');
   const siteItems = sites.slice(0, 60).map((site) =>
-    `<li><a href="/site/${encodeURIComponent(siteSlug(site))}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}</li>`
+    `<li><a href="/site/${routeSiteSlug(site)}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}</li>`
   ).join('\n');
   return layout(`
     <h1>전체닷컴 - 사이트 주소 모음 및 접속 상태 확인</h1>
     <p>전체닷컴에서 주요 사이트 주소, 카테고리별 사이트 목록, 접속 상태와 주소 변경 정보를 확인하세요.</p>
+    ${statusNotice()}
     <section><h2>주요 카테고리</h2><ul>${categoryItems}</ul></section>
     <section><h2>주요 사이트</h2><ul>${siteItems}</ul></section>
     ${section('최근 정상 확인 사이트', recentNormal.slice(0, 8), (site) => `${escapeHtml(site.name)} - ${escapeHtml(statusLabel(site))}`)}
@@ -332,11 +439,12 @@ function categoryHtml(category, categorySites, relatedCategories) {
     body: layout(`
       <h1>${escapeHtml(category.seo_title || `${category.name} 사이트 접속 상태`)}</h1>
       <p>${escapeHtml(category.seo_description || `${category.name} 카테고리의 주요 사이트 주소와 접속 상태를 확인하세요.`)}</p>
+      ${statusNotice()}
       ${category.seo_intro ? `<p>${escapeHtml(plain(category.seo_intro, 600))}</p>` : ''}
       <section>
         <h2>${escapeHtml(category.name)} 사이트 목록</h2>
         <ul>
-          ${categorySites.map((site) => `<li><a href="/site/${encodeURIComponent(siteSlug(site))}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}${site.description ? ` - ${escapeHtml(plain(site.description, 180))}` : ''}</li>`).join('\n')}
+          ${categorySites.map((site) => `<li><a href="/site/${routeSiteSlug(site)}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}${site.description ? ` - ${escapeHtml(plain(site.description, 180))}` : ''}</li>`).join('\n')}
         </ul>
       </section>
       <section>
@@ -355,7 +463,8 @@ function siteHtml(site, relatedSites) {
     description: site.seo_description || `${site.name}의 현재 접속 상태, 등록 주소, 주소 변경 후보, 관련 사이트 정보를 전체닷컴에서 확인하세요.`,
     body: layout(`
       <h1>${escapeHtml(site.seo_h1 || `${site.name} 접속 상태 및 주소 확인`)}</h1>
-      <p>${escapeHtml(site.seo_description || site.description || `${site.name}는 ${site.category || '사이트'} 카테고리에 등록된 사이트입니다. 현재 상태는 ${statusLabel(site)}입니다.`)}</p>
+      <p>${escapeHtml(site.seo_description || site.description || `${site.name}은 ${site.category || '사이트'} 카테고리에 등록된 사이트입니다. 현재 상태는 ${statusLabel(site)}입니다.`)}</p>
+      ${statusNotice()}
       <ul>
         <li>카테고리: ${escapeHtml(site.category || '-')}</li>
         <li>상태: ${escapeHtml(statusLabel(site))}</li>
@@ -368,7 +477,7 @@ function siteHtml(site, relatedSites) {
       ${site.seo_intro ? `<section><h2>${escapeHtml(site.name)} 안내</h2><p>${escapeHtml(plain(site.seo_intro, 1000))}</p></section>` : ''}
       ${features.length ? section('주요 특징', features, (item) => escapeHtml(plain(item, 180))) : ''}
       ${faqs.length ? `<section><h2>자주 묻는 질문</h2>${faqs.map((faq) => `<h3>${escapeHtml(faq.question)}</h3><p>${escapeHtml(faq.answer)}</p>`).join('\n')}</section>` : ''}
-      ${relatedSites.length ? section('관련 사이트', relatedSites.slice(0, 6), (item) => `<a href="/site/${encodeURIComponent(siteSlug(item))}">${escapeHtml(item.name)}</a> - ${escapeHtml(statusLabel(item))}`) : ''}
+      ${relatedSites.length ? section('관련 사이트', relatedSites.slice(0, 6), (item) => `<a href="/site/${routeSiteSlug(item)}">${escapeHtml(item.name)}</a> - ${escapeHtml(statusLabel(item))}`) : ''}
       <section><h2>최근 점검 상태 요약</h2><p>${escapeHtml(statusLabel(site))}${site.status_memo ? ` - ${escapeHtml(plain(site.status_memo, 240))}` : ''}</p></section>
     `),
   };
@@ -378,10 +487,11 @@ function updatesHtml({ changed, problem, normal, added }) {
   return layout(`
     <h1>전체닷컴 최근 사이트 주소 변경 및 접속 상태 업데이트</h1>
     <p>최근 감지된 주소 변경 후보, 접속 불안정, 정상 확인 사이트 정보를 전체닷컴에서 확인하세요.</p>
-    ${section('최근 주소 변경 감지', changed.slice(0, 20), (site) => `<a href="/site/${encodeURIComponent(siteSlug(site))}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
-    ${section('최근 접속 불안정', problem.slice(0, 20), (site) => `<a href="/site/${encodeURIComponent(siteSlug(site))}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
-    ${section('최근 정상 확인', normal.slice(0, 20), (site) => `<a href="/site/${encodeURIComponent(siteSlug(site))}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
-    ${section('최근 추가된 사이트', added.slice(0, 20), (site) => `<a href="/site/${encodeURIComponent(siteSlug(site))}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
+    ${statusNotice()}
+    ${section('최근 주소 변경 감지', changed.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
+    ${section('최근 접속 불안정', problem.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
+    ${section('최근 정상 확인', normal.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
+    ${section('최근 추가된 사이트', added.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
   `);
 }
 
@@ -401,36 +511,99 @@ function toolHtml() {
   `);
 }
 
-async function writeRoute(template, routePath, seo) {
-  const outputPath = routePath === '/'
+function routeOutputPath(routePath) {
+  return routePath === '/'
     ? path.join(distDir, 'index.html')
     : path.join(distDir, routePath.replace(/^\/+/, ''), 'index.html');
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  await fs.writeFile(outputPath, injectSeo(template, seo), 'utf8');
 }
 
-async function main() {
-  const templatePath = path.join(distDir, 'index.html');
-  const template = await fs.readFile(templatePath, 'utf8').catch(() => {
-    throw new Error('dist/index.html not found. Run npm run build before npm run prerender:seo.');
-  });
+async function writeRoute(template, routePath, seo, generatedRoutes) {
+  const outputPath = routeOutputPath(routePath);
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+  await fs.writeFile(outputPath, injectSeo(template, seo), 'utf8');
+  generatedRoutes.push({ route: routePath, outputPath, kind: seo.kind || 'page', site: seo.site || null });
+  return outputPath;
+}
 
-  const [rawPrerenderSettings, seoSettings, features] = await Promise.all([
-    getJson('/api/settings?mode=global&section=seo_prerender', { optional: true }),
-    getJson('/api/settings?mode=global&section=seo_files', { optional: true }),
-    getJson('/api/features/growth', { optional: true }),
-  ]);
-  const settings = normalizePrerenderSettings(rawPrerenderSettings || {});
-  if (!settings.prerender_enabled) {
-    console.log('SEO prerender skipped: prerender_enabled=false');
-    return;
-  }
-  const canonicalBase = seoSettings?.sitemap_base_url || seoSettings?.canonical_url || canonicalFallback;
-  const modes = settings.prerender_include_secure ? ['normal', 'secure'] : ['normal'];
+function homeJsonLd(canonical) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'WebSite',
+    name: '전체닷컴',
+    url: canonical,
+    description: '사이트 주소 모음 및 접속 상태 확인',
+  };
+}
 
+function categoryJsonLd(category, categorySites, canonical, description) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'CollectionPage',
+    name: `${category.name} 사이트 접속 상태`,
+    url: canonical,
+    description,
+    hasPart: categorySites.slice(0, 10).map((site) => ({
+      '@type': 'WebPage',
+      name: site.name,
+      url: absoluteUrl(canonicalFallback, `/site/${siteSlug(site)}`),
+    })),
+  };
+}
+
+function siteJsonLd(site, canonical, description) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'WebPage',
+    name: `${site.name} 접속 상태 및 주소 확인`,
+    url: canonical,
+    description: `${description} ${statusFreshnessNotice}`,
+    about: {
+      '@type': 'Thing',
+      name: site.name,
+      category: site.category || site.categoryName || '',
+    },
+  };
+}
+
+function updatesJsonLd(canonical) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'CollectionPage',
+    name: '전체닷컴 최근 사이트 주소 변경 및 접속 상태 업데이트',
+    url: canonical,
+  };
+}
+
+function toolJsonLd(canonical) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'WebApplication',
+    name: 'URL 상태 확인 도구',
+    url: canonical,
+    applicationCategory: 'UtilityApplication',
+  };
+}
+
+function shouldRenderRoute(route) {
+  return !runtimeOptions.route || runtimeOptions.route === route;
+}
+
+function isSingleMode() {
+  return Boolean(runtimeOptions.route || runtimeOptions.siteId || runtimeOptions.categorySlug);
+}
+
+function modeOfSite(site) {
+  return site.mode === 'secure' ? 'secure' : 'normal';
+}
+
+async function loadData(settings) {
+  const modes = settings.prerender_include_secure && runtimeOptions.includeSecure ? ['normal', 'secure'] : ['normal'];
   const categoriesByMode = {};
-  const sitesByMode = {};
+  const publicSitesByMode = {};
+  const hiddenSites = [];
+  const noSlugSites = [];
   const recentByMode = {};
+
   for (const mode of modes) {
     const [categories, sites, recent] = await Promise.all([
       getJson(`/api/categories?mode=${encodeURIComponent(mode)}`),
@@ -438,96 +611,272 @@ async function main() {
       getJson(`/api/sites/recent-status?mode=${encodeURIComponent(mode)}`, { optional: true }),
     ]);
     categoriesByMode[mode] = Array.isArray(categories) ? categories : [];
-    sitesByMode[mode] = (Array.isArray(sites) ? sites : []).filter((site) => !siteHidden(site));
+    const siteRows = Array.isArray(sites) ? sites : [];
+    hiddenSites.push(...siteRows.filter(siteHidden));
+    const visible = siteRows.filter((site) => !siteHidden(site));
+    noSlugSites.push(...visible.filter((site) => !siteSlug(site)));
+    publicSitesByMode[mode] = visible.filter((site) => siteSlug(site));
     recentByMode[mode] = recent || {};
   }
 
-  const allCategories = modes.flatMap((mode) => categoriesByMode[mode]);
-  const allSites = modes.flatMap((mode) => sitesByMode[mode]);
-  const counts = { home: 0, categories: 0, sites: 0, updates: 0, tools: 0 };
+  let skippedSecure = 0;
+  if (!modes.includes('secure')) {
+    const secureSites = await getJson('/api/sites?mode=secure', { optional: true });
+    skippedSecure = (Array.isArray(secureSites) ? secureSites : []).filter((site) => !siteHidden(site)).length;
+  }
 
-  if (settings.prerender_home) {
-    const recentNormal = modes.flatMap((mode) => recentByMode[mode]?.recent_normal || []);
-    const recentChanged = modes.flatMap((mode) => recentByMode[mode]?.recent_changed || []);
-    const recentProblem = modes.flatMap((mode) => recentByMode[mode]?.recent_problem || []);
+  return { modes, categoriesByMode, publicSitesByMode, hiddenSites, noSlugSites, recentByMode, skippedSecure };
+}
+
+function selectSitePages(allSites, settings) {
+  if (runtimeOptions.categorySlug) return [];
+  if (runtimeOptions.skipSites || !settings.prerender_sites) return [];
+  let candidates = [...allSites];
+  if (runtimeOptions.onlyFeatured) {
+    candidates = candidates.filter(siteFeatured);
+  }
+  if (runtimeOptions.siteId) {
+    candidates = candidates.filter((site) => String(site.id) === String(runtimeOptions.siteId));
+  }
+  if (runtimeOptions.route?.startsWith('/site/')) {
+    const wanted = decodeURIComponent(runtimeOptions.route.replace(/^\/site\//, ''));
+    candidates = candidates.filter((site) => siteSlug(site) === wanted);
+  }
+  return candidates.sort(compareSitePriority).slice(0, settings.prerender_max_site_pages);
+}
+
+function buildSettings(rawSettings) {
+  const settings = normalizePrerenderSettings(rawSettings || {});
+  settings.prerender_include_secure = boolOption(
+    'PRERENDER_INCLUDE_SECURE',
+    settings.prerender_include_secure
+  );
+  settings.prerender_max_site_pages = intOption(
+    'PRERENDER_MAX_SITE_PAGES',
+    settings.prerender_max_site_pages,
+    1,
+    10000
+  );
+  return settings;
+}
+
+async function collectGeneratedHtmlRoutes() {
+  const routes = [];
+  async function walk(dir) {
+    let entries = [];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(fullPath);
+      } else if (entry.name === 'index.html') {
+        const content = await fs.readFile(fullPath, 'utf8').catch(() => '');
+        if (!content.includes('data-seo-prerender="true"')) continue;
+        const relative = path.relative(distDir, fullPath).replace(/\\/g, '/');
+        const route = relative === 'index.html'
+          ? '/'
+          : `/${relative.replace(/\/index\.html$/, '')}`;
+        routes.push(route);
+      }
+    }
+  }
+  await walk(distDir);
+  return routes;
+}
+
+async function validateRoutes(generatedRoutes, hiddenSites) {
+  const expected = new Set(generatedRoutes.map((item) => item.route));
+  const scanned = new Set(await collectGeneratedHtmlRoutes());
+  const hiddenSlugs = new Set(hiddenSites.map(siteSlug).filter(Boolean).map((slug) => `/site/${slug}`));
+  const missing = [];
+  for (const item of generatedRoutes) {
+    const exists = await fs.stat(item.outputPath).then((stat) => stat.isFile()).catch(() => false);
+    if (!exists) missing.push(item.route);
+  }
+  const extra = [...scanned].filter((route) => !expected.has(route));
+  const adminLeak = [...scanned].filter((route) => route.startsWith('/junchae1004') || route.startsWith('/api'));
+  const hiddenLeak = [...scanned].filter((route) => hiddenSlugs.has(route));
+
+  console.log('Prerender route check');
+  console.log(`matched: ${generatedRoutes.length - missing.length}`);
+  console.log(`missing_files: ${missing.length}`);
+  console.log(`extra_files: ${extra.length}`);
+  console.log(`admin_leak: ${adminLeak.length}`);
+  console.log(`hidden_leak: ${hiddenLeak.length}`);
+  if (missing.length) console.warn(`warning missing_files_routes: ${missing.slice(0, 10).join(', ')}`);
+  if (extra.length) console.warn(`warning extra_prerender_routes: ${extra.slice(0, 10).join(', ')}`);
+  if (adminLeak.length) console.warn(`warning admin_or_api_leak: ${adminLeak.join(', ')}`);
+  if (hiddenLeak.length) console.warn(`warning hidden_site_leak: ${hiddenLeak.join(', ')}`);
+}
+
+function printVerificationCommands(canonicalBase, generatedRoutes) {
+  const category = generatedRoutes.find((item) => item.route.startsWith('/category/'))?.route || '/category/portal';
+  const site = generatedRoutes.find((item) => item.route.startsWith('/site/'))?.route || '/site/naver';
+  const base = String(canonicalBase || canonicalFallback).replace(/\/+$/, '');
+  console.log('Verification commands');
+  console.log(`curl -s ${base}/ | grep -E "전체닷컴|사이트 주소|접속 상태"`);
+  console.log(`curl -s ${base}${category} | grep -E "사이트|정상|접속 상태"`);
+  console.log(`curl -s ${base}${site} | grep -E "상태|카테고리|정상"`);
+  console.log(`curl -s ${base}/updates | grep -E "주소 변경|정상 확인|접속 상태"`);
+}
+
+async function main() {
+  const startedAt = Date.now();
+  const templatePath = path.join(distDir, 'index.html');
+  const template = await fs.readFile(templatePath, 'utf8').catch(() => {
+    throw new Error(`${path.relative(rootDir, templatePath)} not found. Run npm run build before npm run prerender:seo.`);
+  });
+
+  const [rawPrerenderSettings, seoSettings, features] = await Promise.all([
+    getJson('/api/settings?mode=global&section=seo_prerender', { optional: true }),
+    getJson('/api/settings?mode=global&section=seo_files', { optional: true }),
+    getJson('/api/features/growth', { optional: true }),
+  ]);
+  const settings = buildSettings(rawPrerenderSettings || {});
+  if (!settings.prerender_enabled) {
+    console.log('SEO prerender skipped: prerender_enabled=false');
+    return;
+  }
+
+  const canonicalBase = seoSettings?.sitemap_base_url || seoSettings?.canonical_url || canonicalFallback;
+  const { modes, categoriesByMode, publicSitesByMode, hiddenSites, noSlugSites, recentByMode, skippedSecure } = await loadData(settings);
+  const allCategories = modes.flatMap((mode) => categoriesByMode[mode]);
+  const allSites = modes.flatMap((mode) => publicSitesByMode[mode]);
+  const generatedRoutes = [];
+  const counts = { home: 0, categories: 0, sites: 0, updates: 0, tools: 0 };
+  const modeCounts = { normal: 0, secure: 0 };
+
+  if (settings.prerender_home && shouldRenderRoute('/') && !runtimeOptions.siteId && !runtimeOptions.categorySlug) {
+    const recentNormal = modes.flatMap((mode) => recentByMode[mode]?.recent_normal || []).filter((site) => !siteHidden(site));
+    const recentChanged = modes.flatMap((mode) => recentByMode[mode]?.recent_changed || []).filter((site) => !siteHidden(site));
+    const recentProblem = modes.flatMap((mode) => recentByMode[mode]?.recent_problem || []).filter((site) => !siteHidden(site));
+    const canonical = absoluteUrl(canonicalBase, '/');
     await writeRoute(template, '/', {
+      kind: 'home',
       title: '전체닷컴 - 사이트 주소 모음 및 접속 상태 확인',
       description: '전체닷컴에서 주요 사이트 주소, 카테고리별 사이트 목록, 접속 상태와 주소 변경 정보를 확인하세요.',
-      canonical: absoluteUrl(canonicalBase, '/'),
+      canonical,
+      jsonLd: homeJsonLd(canonical),
       body: homeHtml({ categories: allCategories, sites: allSites, recentNormal, recentChanged, recentProblem }),
-    });
+    }, generatedRoutes);
     counts.home = 1;
   }
 
-  if (settings.prerender_categories) {
+  if (settings.prerender_categories && !runtimeOptions.siteId) {
     for (const mode of modes) {
       for (const category of categoriesByMode[mode]) {
         const slug = categorySlug(category);
-        const categorySites = sitesByMode[mode].filter((site) => (site.category || site.categoryName) === category.name);
+        const route = `/category/${encodeURIComponent(slug)}`;
+        if (runtimeOptions.categorySlug && runtimeOptions.categorySlug !== slug) continue;
+        if (!shouldRenderRoute(route) && !runtimeOptions.categorySlug) continue;
+        const categorySites = publicSitesByMode[mode].filter((site) => (site.category || site.categoryName) === category.name);
         const related = categoriesByMode[mode].filter((item) => item.id !== category.id);
         const page = categoryHtml(category, categorySites, related);
-        await writeRoute(template, `/category/${encodeURIComponent(slug)}`, {
+        const canonical = absoluteUrl(canonicalBase, route);
+        await writeRoute(template, route, {
+          kind: 'category',
           title: page.title,
           description: page.description,
-          canonical: absoluteUrl(canonicalBase, `/category/${encodeURIComponent(slug)}`),
+          canonical,
+          jsonLd: categoryJsonLd(category, categorySites, canonical, page.description),
           body: page.body,
-        });
+        }, generatedRoutes);
         counts.categories += 1;
       }
     }
   }
 
-  if (settings.prerender_sites) {
-    const sitePages = allSites.slice(0, settings.prerender_max_site_pages);
-    for (const site of sitePages) {
-      const slug = siteSlug(site);
-      const modeSites = sitesByMode[site.mode || 'normal'] || allSites;
-      const related = modeSites.filter((item) => item.id !== site.id && (item.category || item.categoryName) === (site.category || site.categoryName)).slice(0, 6);
-      const page = siteHtml(site, related);
-      await writeRoute(template, `/site/${encodeURIComponent(slug)}`, {
-        title: page.title,
-        description: page.description,
-        canonical: absoluteUrl(canonicalBase, `/site/${encodeURIComponent(slug)}`),
-        body: page.body,
-      });
-      counts.sites += 1;
-    }
+  const sitePages = selectSitePages(allSites, settings);
+  for (const site of sitePages) {
+    const slug = siteSlug(site);
+    const route = `/site/${encodeURIComponent(slug)}`;
+    if (!shouldRenderRoute(route) && !runtimeOptions.siteId) continue;
+    const modeSites = publicSitesByMode[modeOfSite(site)] || allSites;
+    const related = modeSites
+      .filter((item) => item.id !== site.id && (item.category || item.categoryName) === (site.category || site.categoryName))
+      .slice(0, 6);
+    const page = siteHtml(site, related);
+    const canonical = absoluteUrl(canonicalBase, route);
+    await writeRoute(template, route, {
+      kind: 'site',
+      site,
+      title: page.title,
+      description: page.description,
+      canonical,
+      jsonLd: siteJsonLd(site, canonical, page.description),
+      body: page.body,
+    }, generatedRoutes);
+    counts.sites += 1;
+    modeCounts[modeOfSite(site)] += 1;
   }
 
-  if (settings.prerender_updates && features?.show_updates_page !== false) {
+  if (settings.prerender_updates && features?.show_updates_page !== false && shouldRenderRoute('/updates') && !runtimeOptions.siteId && !runtimeOptions.categorySlug) {
     const normalUpdates = await getJson('/api/sites/updates?mode=normal', { optional: true });
-    const secureUpdates = settings.prerender_include_secure ? await getJson('/api/sites/updates?mode=secure', { optional: true }) : null;
-    const changed = [...(normalUpdates?.recent_changed || []), ...(secureUpdates?.recent_changed || [])];
-    const problem = [...(normalUpdates?.recent_problem || []), ...(secureUpdates?.recent_problem || [])];
-    const normal = [...(normalUpdates?.recent_normal || []), ...(secureUpdates?.recent_normal || [])];
-    const added = [...(normalUpdates?.recent_added || []), ...(secureUpdates?.recent_added || [])];
+    const secureUpdates = settings.prerender_include_secure && runtimeOptions.includeSecure
+      ? await getJson('/api/sites/updates?mode=secure', { optional: true })
+      : null;
+    const publicUpdateSite = (site) => !siteHidden(site) && siteSlug(site);
+    const changed = [...(normalUpdates?.recent_changed || []), ...(secureUpdates?.recent_changed || [])].filter(publicUpdateSite);
+    const problem = [...(normalUpdates?.recent_problem || []), ...(secureUpdates?.recent_problem || [])].filter(publicUpdateSite);
+    const normal = [...(normalUpdates?.recent_normal || []), ...(secureUpdates?.recent_normal || [])].filter(publicUpdateSite);
+    const added = [...(normalUpdates?.recent_added || []), ...(secureUpdates?.recent_added || [])].filter(publicUpdateSite);
+    const canonical = absoluteUrl(canonicalBase, '/updates');
     await writeRoute(template, '/updates', {
+      kind: 'updates',
       title: '전체닷컴 최근 사이트 주소 변경 및 접속 상태 업데이트',
       description: '최근 감지된 주소 변경 후보, 접속 불안정, 정상 확인 사이트 정보를 전체닷컴에서 확인하세요.',
-      canonical: absoluteUrl(canonicalBase, '/updates'),
+      canonical,
+      jsonLd: updatesJsonLd(canonical),
       body: updatesHtml({ changed, problem, normal, added }),
-    });
+    }, generatedRoutes);
     counts.updates = 1;
   }
 
-  if (settings.prerender_tools && features?.show_url_status_tool !== false) {
+  if (settings.prerender_tools && features?.show_url_status_tool !== false && shouldRenderRoute('/tools/url-status-checker') && !runtimeOptions.siteId && !runtimeOptions.categorySlug) {
+    const canonical = absoluteUrl(canonicalBase, '/tools/url-status-checker');
     await writeRoute(template, '/tools/url-status-checker', {
+      kind: 'tool',
       title: 'URL 상태 확인 도구 - 전체닷컴',
       description: 'URL의 접속 상태, 리다이렉트, 접근 제한 여부를 확인할 수 있는 전체닷컴 도구입니다.',
-      canonical: absoluteUrl(canonicalBase, '/tools/url-status-checker'),
+      canonical,
+      jsonLd: toolJsonLd(canonical),
       body: toolHtml(),
-    });
+    }, generatedRoutes);
     counts.tools = 1;
   }
 
-  const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
-  console.log('SEO prerender complete');
-  console.log(`home: ${counts.home}`);
-  console.log(`categories: ${counts.categories}`);
-  console.log(`sites: ${counts.sites}`);
-  console.log(`updates: ${counts.updates}`);
-  console.log(`tools: ${counts.tools}`);
-  console.log(`total: ${total} pages`);
+  if (isSingleMode()) {
+    if (!generatedRoutes.length) {
+      throw new Error(`SEO prerender single route failed: no route matched (${runtimeOptions.route || runtimeOptions.siteId || runtimeOptions.categorySlug})`);
+    }
+    const single = generatedRoutes[0];
+    console.log('SEO prerender single route complete');
+    console.log(`route: ${single.route}`);
+    console.log(`output: ${path.relative(rootDir, single.outputPath).replace(/\\/g, '/')}`);
+    console.log('status: success');
+  } else {
+    const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
+    console.log('SEO prerender complete');
+    console.log(`home: ${counts.home}`);
+    console.log(`categories: ${counts.categories}`);
+    console.log(`sites: ${counts.sites}`);
+    console.log(`updates: ${counts.updates}`);
+    console.log(`tools: ${counts.tools}`);
+    console.log(`total: ${total}`);
+    console.log(`skipped_hidden: ${hiddenSites.length}`);
+    console.log(`skipped_no_slug: ${noSlugSites.length}`);
+    console.log(`skipped_secure: ${skippedSecure}`);
+    console.log(`mode_normal: ${modeCounts.normal}`);
+    console.log(`mode_secure: ${modeCounts.secure}`);
+    console.log(`duration_ms: ${Date.now() - startedAt}`);
+  }
+
+  await validateRoutes(generatedRoutes, hiddenSites);
+  printVerificationCommands(canonicalBase, generatedRoutes);
 }
 
 main().catch((err) => {
