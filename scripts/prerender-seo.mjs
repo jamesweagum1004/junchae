@@ -35,6 +35,46 @@ const statusLabels = {
   candidate_rejected: '후보 확인 완료',
 };
 
+const prerenderBoot = `<script>document.documentElement.classList.add('js-enabled');</script>`;
+
+const prerenderCriticalCss = `<style id="seo-prerender-boot">
+html.js-enabled .seo-prerender {
+  position: absolute !important;
+  width: 1px !important;
+  height: 0 !important;
+  max-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  opacity: 0 !important;
+  overflow: hidden !important;
+  pointer-events: none !important;
+}
+#app-loading {
+  display: none;
+}
+html.js-enabled #app-loading {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  background: #0f172a;
+  color: #f8fafc;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+.app-loading-logo {
+  font-size: 24px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.app-loading-text {
+  font-size: 14px;
+  color: #cbd5e1;
+}
+</style>`;
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -167,6 +207,24 @@ function replaceOrInsertHead(html, selectorRegex, tag) {
   return html.replace('</head>', `    ${tag}\n  </head>`);
 }
 
+function ensurePrerenderBoot(html) {
+  let next = html;
+  if (!next.includes('document.documentElement.classList.add(\'js-enabled\')')) {
+    next = next.replace('</head>', `    ${prerenderBoot}\n  </head>`);
+  }
+  if (!next.includes('id="seo-prerender-boot"')) {
+    next = next.replace('</head>', `    ${prerenderCriticalCss}\n  </head>`);
+  }
+  return next;
+}
+
+function appLoadingHtml() {
+  return `<div id="app-loading" class="app-loading" aria-live="polite">
+  <div class="app-loading-logo">전체닷컴</div>
+  <div class="app-loading-text">사이트 접속 상태를 불러오는 중입니다</div>
+</div>`;
+}
+
 function injectSeo(html, { title, description, canonical, type = 'website', body }) {
   const safeTitle = escapeHtml(title);
   const safeDescription = escapeHtml(description);
@@ -179,7 +237,8 @@ function injectSeo(html, { title, description, canonical, type = 'website', body
   next = replaceOrInsertHead(next, /<meta\s+property=["']og:description["'][^>]*>/i, `<meta property="og:description" content="${safeDescription}" />`);
   next = replaceOrInsertHead(next, /<meta\s+property=["']og:url["'][^>]*>/i, `<meta property="og:url" content="${safeCanonical}" />`);
   next = replaceOrInsertHead(next, /<meta\s+property=["']og:type["'][^>]*>/i, `<meta property="og:type" content="${escapeHtml(type)}" />`);
-  return next.replace(/<div id="root">[\s\S]*?<\/div>/i, `<div id="root">\n${body}\n    </div>`);
+  next = ensurePrerenderBoot(next);
+  return next.replace(/<div id="root">[\s\S]*?<\/div>/i, `<div id="root">\n${body}\n${appLoadingHtml()}\n    </div>`);
 }
 
 function section(title, items, renderItem) {
@@ -195,7 +254,7 @@ function section(title, items, renderItem) {
 }
 
 function layout(content) {
-  return `<main class="seo-prerender">
+  return `<main class="seo-prerender" data-seo-prerender="true">
   ${content}
 </main>`;
 }
