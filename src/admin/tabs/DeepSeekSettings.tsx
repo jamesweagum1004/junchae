@@ -4,11 +4,19 @@ import ModeSubTabs from '../ModeSubTabs';
 import { apiJson, apiMode, loadSettings, saveSettings } from '../../lib/adminApi';
 
 const defaultPrompt = '다음 사이트의 검색 친화적인 한국어 SEO 제목, 메타 설명, 키워드를 생성하세요.';
+const defaultDeepSeekModel = 'deepseek-v4-flash';
+
+const normalizeDeepSeekModel = (value?: string | null) => {
+  if (value === 'deepseek-chat') return 'deepseek-v4-flash';
+  if (value === 'deepseek-reasoner') return 'deepseek-v4-pro';
+  if (value === 'deepseek-v4-pro') return 'deepseek-v4-pro';
+  return defaultDeepSeekModel;
+};
 
 export default function DeepSeekSettings() {
   const [activeMode, setActiveMode] = useState<'standard' | 'secure'>('standard');
   const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState('deepseek-chat');
+  const [model, setModel] = useState(defaultDeepSeekModel);
   const [prompt, setPrompt] = useState(defaultPrompt);
   const [result, setResult] = useState('');
   const [testing, setTesting] = useState(false);
@@ -18,7 +26,7 @@ export default function DeepSeekSettings() {
     loadSettings(activeMode, 'deepseek')
       .then((settings) => {
         setApiKey(settings.api_key || '');
-        setModel(settings.model || 'deepseek-chat');
+        setModel(normalizeDeepSeekModel(settings.model));
         setPrompt(settings.prompt_template || defaultPrompt);
       })
       .catch((err) => console.error('DeepSeek 설정 로드 실패', err));
@@ -28,7 +36,7 @@ export default function DeepSeekSettings() {
     setTesting(true);
     setResult('');
     try {
-      const data = await apiJson<{ text: string }>('/api/deepseek/test', {
+      const data = await apiJson<{ text: string; model?: string }>('/api/deepseek/test', {
         method: 'POST',
         body: JSON.stringify({
           mode: apiMode(activeMode),
@@ -40,10 +48,10 @@ export default function DeepSeekSettings() {
           },
         }),
       });
-      setResult(data.text);
+      setResult(`API 응답 정상 / model: ${normalizeDeepSeekModel(data.model)}\n\n${data.text}`);
     } catch (err) {
       console.error('DeepSeek 테스트 실패', err);
-      setResult(err instanceof Error ? err.message : 'DeepSeek 테스트에 실패했습니다.');
+      setResult(err instanceof Error ? err.message : `DeepSeek 테스트에 실패했습니다. / model: ${normalizeDeepSeekModel(model)}`);
     } finally {
       setTesting(false);
     }
@@ -52,7 +60,7 @@ export default function DeepSeekSettings() {
   const save = async () => {
     try {
       const settings: Record<string, string> = {
-        model,
+        model: normalizeDeepSeekModel(model),
         prompt_template: prompt,
       };
       if (apiKey.trim() && !apiKey.includes('••••')) {
@@ -60,6 +68,7 @@ export default function DeepSeekSettings() {
       }
       const savedSettings = await saveSettings(activeMode, 'deepseek', settings);
       setApiKey(savedSettings.api_key || apiKey);
+      setModel(normalizeDeepSeekModel(savedSettings.model || settings.model));
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err) {
@@ -95,8 +104,8 @@ export default function DeepSeekSettings() {
             onChange={(e) => setModel(e.target.value)}
             className="w-full px-3 py-2.5 text-sm bg-obsidian-700 border border-obsidian-500 rounded-lg text-white focus:outline-none focus:border-neon-orange"
           >
-            <option value="deepseek-chat">deepseek-chat</option>
-            <option value="deepseek-reasoner">deepseek-reasoner</option>
+            <option value="deepseek-v4-flash">deepseek-v4-flash - 빠른 생성용</option>
+            <option value="deepseek-v4-pro">deepseek-v4-pro - 고품질 생성용</option>
           </select>
         </div>
 

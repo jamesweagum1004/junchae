@@ -195,6 +195,13 @@ function statusLabel(site) {
   return statusLabels[status] || statusLabels.unknown;
 }
 
+function formatPublicCheckDate(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  return `${date.getFullYear()}. ${date.getMonth() + 1}. ${date.getDate()}. 확인`;
+}
+
 function parseTextList(value, limit) {
   if (!value) return [];
   if (Array.isArray(value)) return value.map((item) => String(item?.title || item?.text || item?.feature || item)).filter(Boolean).slice(0, limit);
@@ -354,6 +361,7 @@ function siteHtml(site, relatedSites) {
         <li>상태: ${escapeHtml(statusLabel(site))}</li>
         <li>등록 주소: ${escapeHtml(site.url || '-')}</li>
         ${site.http_status ? `<li>HTTP 상태: ${escapeHtml(site.http_status)}</li>` : ''}
+        ${site.last_checked_at ? `<li>마지막 확인: ${escapeHtml(formatPublicCheckDate(site.last_checked_at))}</li>` : ''}
         ${site.final_url ? `<li>최종 URL: ${escapeHtml(site.final_url)}</li>` : ''}
         ${site.candidate_new_url ? `<li>새 주소 후보 감지: ${escapeHtml(site.candidate_new_url)}</li>` : ''}
       </ul>

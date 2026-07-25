@@ -151,3 +151,18 @@ export const calculateSiteStatusScore = (site: { check_status?: unknown; status?
   const penalty = Math.max(0, Number(site.down_count || 0)) * 5;
   return Math.max(0, Math.min(100, base - penalty));
 };
+
+export const formatPublicCheckDate = (value?: string | null) => {
+  if (!value) return '확인일 정보 없음';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '확인일 정보 없음';
+
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDiff = Math.round((startOfToday - startOfDate) / 86400000);
+
+  if (dayDiff === 0) return '오늘 확인';
+  if (dayDiff === 1) return '어제 확인';
+  return `${date.getFullYear()}. ${date.getMonth() + 1}. ${date.getDate()}. 확인`;
+};

@@ -8,10 +8,10 @@ import { useTheme } from '../context/ThemeContext';
 import type { Site } from '../data/categories';
 import { categoryPath } from '../lib/categorySlug';
 import { getSiteSlug, sitePath, slugifySiteName } from '../lib/siteSlug';
-import { calculateSiteStatusScore, getCheckStatusBadgeClass, getCheckStatusLabel, getSiteStatusMeta, isProblemStatus, normalizeCheckStatus } from '../lib/siteStatus';
+import { calculateSiteStatusScore, formatPublicCheckDate, getCheckStatusBadgeClass, getCheckStatusLabel, getSiteStatusMeta, isProblemStatus, normalizeCheckStatus } from '../lib/siteStatus';
 import { useFeatureFlags } from '../context/FeatureFlagsContext';
 import { readRecentlyViewedSites, RecentlyViewedSite, saveRecentlyViewedSite } from '../lib/recentlyViewedSites';
-import { RecentlyViewedSitesBlock, formatDateTime } from '../components/GrowthFeatureBlocks';
+import { RecentlyViewedSitesBlock } from '../components/GrowthFeatureBlocks';
 
 const siteName = '전체닷컴';
 
@@ -41,19 +41,6 @@ const safeDecode = (value: string) => {
   } catch {
     return value;
   }
-};
-
-const formatPublicCheckDate = (value?: string | null) => {
-  if (!value) return '확인일 정보 없음';
-  const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return '확인일 정보 없음';
-  const today = new Date();
-  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
-  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-  const dayDiff = Math.round((startOfToday - startOfDate) / 86400000);
-  if (dayDiff === 0) return '오늘 확인';
-  if (dayDiff === 1) return '어제 확인';
-  return `${date.getFullYear()}. ${date.getMonth() + 1}. ${date.getDate()}. 확인`;
 };
 
 type FaqItem = {
@@ -384,7 +371,7 @@ export default function SitePage() {
                     </div>
                     <div className={`rounded-xl border p-3 ${isSecure ? 'border-white/[0.06] bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
                       <div className="text-[10px] font-bold text-slate-500">마지막 확인</div>
-                      <div className={`mt-1 text-xs font-bold ${isSecure ? 'text-slate-300' : 'text-slate-700'}`}>{formatDateTime(site.last_checked_at)}</div>
+                      <div className={`mt-1 text-xs font-bold ${isSecure ? 'text-slate-300' : 'text-slate-700'}`}>{formatPublicCheckDate(site.last_checked_at)}</div>
                     </div>
                     <div className={`rounded-xl border p-3 ${isSecure ? 'border-white/[0.06] bg-white/[0.03]' : 'border-slate-200 bg-white/70'}`}>
                       <div className="text-[10px] font-bold text-slate-500">HTTP</div>

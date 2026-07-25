@@ -2388,6 +2388,24 @@ async function getSettingValue(mode, section, key) {
   return rows[0]?.setting_value || '';
 }
 
+function normalizeDeepSeekModel(model) {
+  const value = String(model || '').trim();
+  if (!value) return 'deepseek-v4-flash';
+  if (value === 'deepseek-chat') return 'deepseek-v4-flash';
+  if (value === 'deepseek-reasoner') return 'deepseek-v4-pro';
+  if (value === 'deepseek-v4-flash') return 'deepseek-v4-flash';
+  if (value === 'deepseek-v4-pro') return 'deepseek-v4-pro';
+  return 'deepseek-v4-flash';
+}
+
+function normalizeDeepSeekSettings(settings = {}) {
+  const next = { ...(settings || {}) };
+  if ('model' in next) {
+    next.model = normalizeDeepSeekModel(next.model);
+  }
+  return next;
+}
+
 async function saveSettings(mode, section, settings, secretKeys = []) {
   const entries = Object.entries(settings || {});
   for (const [rawKey, rawValue] of entries) {
@@ -2880,14 +2898,18 @@ async function getDeepSeekConfig(mode) {
     (await getSettingValue(mode, 'deepseek', 'api_key')) ||
     process.env.DEEPSEEK_API_KEY ||
     '';
-  const model =
+  const rawModel =
     (await getSettingValue(mode, 'deepseek', 'model')) ||
     process.env.DEEPSEEK_MODEL ||
-    'deepseek-chat';
+    'deepseek-v4-flash';
+  const model = normalizeDeepSeekModel(rawModel);
+  if (rawModel && rawModel !== model) {
+    await saveSettings(mode, 'deepseek', { model });
+  }
   const promptTemplate =
     (await getSettingValue(mode, 'deepseek', 'prompt_template')) ||
     '다음 사이트의 검색 친화적인 한국어 SEO 데이터를 JSON으로 생성하세요.';
-  return { apiKey, model, promptTemplate };
+  return { apiKey, model, rawModel, promptTemplate };
 }
 
 async function callDeepSeek({ mode, messages }) {
@@ -3104,7 +3126,9 @@ app.get('/api/settings', asyncRoute(async (req, res) => {
       },
     });
   }
-  const settings = await getSettings(mode, section, false);
+  const settings = section === 'deepseek'
+    ? normalizeDeepSeekSettings(await getSettings(mode, section, false))
+    : await getSettings(mode, section, false);
   return res.json({ ok: true, data: settings });
 }));
 
@@ -3119,8 +3143,13 @@ app.post('/api/settings', requireAdminToken, asyncRoute(async (req, res) => {
   }
 
   const secretKeys = section === 'deepseek' ? ['api_key'] : [];
-  await saveSettings(mode, section, req.body?.settings || {}, secretKeys);
-  const settings = await getSettings(mode, section, false);
+  const payload = section === 'deepseek'
+    ? normalizeDeepSeekSettings(req.body?.settings || {})
+    : req.body?.settings || {};
+  await saveSettings(mode, section, payload, secretKeys);
+  const settings = section === 'deepseek'
+    ? normalizeDeepSeekSettings(await getSettings(mode, section, false))
+    : await getSettings(mode, section, false);
   return res.json({ ok: true, data: settings });
 }));
 
@@ -3887,7 +3916,7 @@ app.patch('/api/sites/:id/seo', requireAdminToken, asyncRoute(async (req, res) =
 app.post('/api/deepseek/test', requireAdminToken, asyncRoute(async (req, res) => {
   const mode = normalizeMode(req.body?.mode);
   const site = req.body?.site || {};
-  const { promptTemplate } = await getDeepSeekConfig(mode);
+  const { promptTemplate, model } = await getDeepSeekConfig(mode);
 
   try {
     const content = await callDeepSeek({
@@ -3900,10 +3929,10 @@ app.post('/api/deepseek/test', requireAdminToken, asyncRoute(async (req, res) =>
         },
       ],
     });
-    return res.json({ ok: true, data: { text: content } });
+    return res.json({ ok: true, data: { text: content, model } });
   } catch (err) {
     console.error('DeepSeek test error:', { code: err.code, status: err.status, message: err.message, body: err.body });
-    return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', err.message);
+    return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', `${err.message} / model: ${model}`);
   }
 }));
 
@@ -3924,7 +3953,7 @@ async function generateSiteSeoData({ siteId, mode, options = {} }) {
   }
 
   const effectiveMode = mode ? normalizeMode(mode) : normalizeMode(site.mode);
-  const { promptTemplate } = await getDeepSeekConfig(effectiveMode);
+  const { promptTemplate, model: deepSeekModel } = await getDeepSeekConfig(effectiveMode);
   const prompt = `
 ${promptTemplate}
 
@@ -3959,7 +3988,7 @@ seo_faq는 3~5개의 질문/답변으로 작성하세요.
     ],
   });
   const parsed = parseJsonFromText(text);
-  return { text, json: parsed, mode: effectiveMode };
+  return { text, json: parsed, mode: effectiveMode, model: deepSeekModel };
 }
 
 async function buildGeneratedSeoUpdates(site, generatedSeo) {
@@ -4067,7 +4096,7 @@ app.post('/api/deepseek/generate-global-seo', requireAdminToken, asyncRoute(asyn
   const mode = normalizeMode(req.body?.mode);
   const categories = Array.isArray(req.body?.categories) ? req.body.categories : [];
   const sites = Array.isArray(req.body?.sites) ? req.body.sites : [];
-  const { promptTemplate } = await getDeepSeekConfig(mode);
+  const { promptTemplate, model: deepSeekModel } = await getDeepSeekConfig(mode);
 
   const categorySummary = categories
     .map((category) => {
@@ -4122,7 +4151,7 @@ robots 기본값은 index,follow 입니다.
       ],
     });
     const parsed = parseJsonFromText(text);
-    return res.json({ ok: true, data: { text, json: parsed } });
+    return res.json({ ok: true, data: { text, json: parsed, model: deepSeekModel } });
   } catch (err) {
     console.error('DeepSeek global SEO generation error:', { code: err.code, status: err.status, message: err.message, body: err.body });
     return jsonError(res, err.status || 500, err.code || 'DEEPSEEK_ERROR', err.message);
@@ -4142,7 +4171,7 @@ app.post('/api/deepseek/generate-category-seo', requireAdminToken, asyncRoute(as
     return jsonError(res, 400, 'VALIDATION_ERROR', 'categoryName is required.');
   }
 
-  const { promptTemplate } = await getDeepSeekConfig(mode);
+  const { promptTemplate, model: deepSeekModel } = await getDeepSeekConfig(mode);
   const fallback = fallbackCategorySeo(categoryName);
   const safeCategoryLabel = isSecureMode ? safeSecureCategoryLabel(categoryName) : categoryName;
   const prompt = isSecureMode
@@ -4218,6 +4247,7 @@ seo_faq 배열 [{"question":"...", "answer":"..."}]
         fallback: false,
         text,
         json: parsed,
+        model: deepSeekModel,
       },
     });
   } catch (err) {
