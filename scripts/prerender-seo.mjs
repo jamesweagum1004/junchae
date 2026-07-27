@@ -258,10 +258,23 @@ function statusLabel(site) {
   return statusLabels[status] || statusLabels.unknown;
 }
 
+function publicStatusSummary(site) {
+  const date = formatPublicCheckDate(site?.last_checked_at || site?.updated_at || site?.created_at);
+  return `${escapeHtml(site.name)} - ${escapeHtml(statusLabel(site))} - ${escapeHtml(date)}`;
+}
+
 function formatPublicCheckDate(value) {
-  if (!value) return '';
+  if (!value) return '확인일 정보 없음';
   const date = new Date(value);
-  if (!Number.isFinite(date.getTime())) return '';
+  if (!Number.isFinite(date.getTime())) return '확인일 정보 없음';
+
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const startOfDate = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  const dayDiff = Math.round((startOfToday - startOfDate) / 86400000);
+
+  if (dayDiff === 0) return '오늘 확인';
+  if (dayDiff === 1) return '어제 확인';
   return `${date.getFullYear()}. ${date.getMonth() + 1}. ${date.getDate()}. 확인`;
 }
 
@@ -492,10 +505,10 @@ function updatesHtml({ changed, problem, normal, added }) {
     <h1>전체닷컴 최근 사이트 주소 변경 및 접속 상태 업데이트</h1>
     <p>최근 감지된 주소 변경 후보, 접속 불안정, 정상 확인 사이트 정보를 전체닷컴에서 확인하세요.</p>
     ${statusNotice()}
-    ${section('최근 주소 변경 감지', changed.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
-    ${section('최근 접속 불안정', problem.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
-    ${section('최근 정상 확인', normal.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
-    ${section('최근 추가된 사이트', added.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${escapeHtml(site.name)}</a> - ${escapeHtml(statusLabel(site))}`)}
+    ${section('최근 주소 변경 감지', changed.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${publicStatusSummary(site)}</a>`)}
+    ${section('최근 접속 불안정', problem.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${publicStatusSummary(site)}</a>`)}
+    ${section('최근 정상 확인', normal.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${publicStatusSummary(site)}</a>`)}
+    ${section('최근 추가된 사이트', added.slice(0, 20), (site) => `<a href="/site/${routeSiteSlug(site)}">${publicStatusSummary(site)}</a>`)}
   `);
 }
 

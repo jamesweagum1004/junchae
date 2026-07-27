@@ -4,8 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import Header from '../components/Header';
 import { useFeatureFlags } from '../context/FeatureFlagsContext';
 import { useTheme } from '../context/ThemeContext';
-import { StatusSite, categoryHrefFromStatusSite, formatDateTime } from '../components/GrowthFeatureBlocks';
-import { getCheckStatusBadgeClass, getCheckStatusLabel } from '../lib/siteStatus';
+import { StatusSite, categoryHrefFromStatusSite } from '../components/GrowthFeatureBlocks';
+import { formatPublicCheckDate, getCheckStatusBadgeClass, getCheckStatusLabel } from '../lib/siteStatus';
 import { sitePath } from '../lib/siteSlug';
 
 type UpdatesPayload = {
@@ -127,7 +127,7 @@ function UpdateItemCard({ site, isSecure }: { site: StatusSite; isSecure: boolea
             </button>
             <span className={`inline-flex items-center gap-1 text-[11px] ${isSecure ? 'text-slate-600' : 'text-slate-400'}`}>
               <Clock size={11} />
-              {formatDateTime(site.last_checked_at || site.created_at)}
+              {formatPublicCheckDate(site.last_checked_at || site.updated_at || site.created_at)}
             </span>
           </div>
           {site.candidate_new_url && (

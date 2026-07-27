@@ -20,6 +20,7 @@ export type StatusSite = {
   last_checked_at?: string | null;
   candidate_new_url?: string | null;
   created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export const formatDateTime = (value?: string | null) => {
